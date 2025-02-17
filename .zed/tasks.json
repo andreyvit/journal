@@ -1,0 +1,13 @@
+[
+  {
+    "label": "$ZED_SYMBOL",
+    "command": "go test . -v -run '^$ZED_SYMBOL$'",
+    "cwd": "$ZED_DIRNAME",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "no_focus",
+    "hide": "never",
+    "shell": "system",
+    "tags": ["go-test"]
+  }
+]
