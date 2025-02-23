@@ -30,3 +30,9 @@ func closeUnlessOK(f *os.File, ok *bool) {
 	}
 	f.Close()
 }
+
+func closeIfNonNil(pf **os.File) {
+	if f := *pf; f != nil {
+		f.Close()
+	}
+}

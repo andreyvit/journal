@@ -94,7 +94,7 @@ type Options struct {
 	Verbose bool
 }
 
-const DefaultMaxFileSize = 4 * 1024 * 1024
+const DefaultMaxFileSize = 10 * 1024 * 1024
 
 type Journal struct {
 	context          context.Context
@@ -326,19 +326,19 @@ func (j *Journal) WriteRecord(timestamp uint64, data []byte) error {
 
 	var seg uint32
 	var rec uint64
-	var prevChecksum uint64
 	if j.segWriter == nil {
 		seg = 1
 		rec = 1
-		prevChecksum = 0
 	} else if j.segWriter.shouldRotate(len(data)) {
 		if j.verbose {
 			j.logger.Debug("rotating segment", "journal", j.debugName, "segment", j.segWriter.seg, "segment_size", j.segWriter.size, "data_size", len(data))
 		}
 		seg = j.segWriter.seg + 1
 		rec = j.segWriter.nextRec
-		j.segWriter.close()
-		prevChecksum = j.segWriter.checksum() // close might do a commit
+		err := j.segWriter.finalizeAndClose()
+		if err != nil {
+			return err
+		}
 		j.segWriter = nil
 	}
 
@@ -346,7 +346,7 @@ func (j *Journal) WriteRecord(timestamp uint64, data []byte) error {
 		if j.verbose {
 			j.logger.Debug("starting segment", "journal", j.debugName, "segment", seg, "record", rec)
 		}
-		sw, err := startSegment(j, seg, timestamp, rec, prevChecksum)
+		sw, err := startSegment(j, seg, timestamp, rec)
 		if err != nil {
 			return j.fail(err)
 		}

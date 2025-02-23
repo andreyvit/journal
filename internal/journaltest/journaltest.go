@@ -66,6 +66,18 @@ func (j *TestJournal) Put(fileName string, expected ...string) {
 	ensure(os.WriteFile(filepath.Join(j.Dir, fileName), Expand(expected...), 0o644))
 }
 
+func (j *TestJournal) All(filter journal.Filter) []journal.Record {
+	var result []journal.Record
+	fail := func(err error) {
+		j.T.Fatalf("journal error: %v", err)
+	}
+	for rec := range j.Journal.Records(filter, fail) {
+		rec.Data = bytes.Clone(rec.Data)
+		result = append(result, rec)
+	}
+	return result
+}
+
 func (j *TestJournal) Data(fileName string) []byte {
 	b, err := os.ReadFile(filepath.Join(j.Dir, fileName))
 	if err != nil {

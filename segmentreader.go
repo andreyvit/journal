@@ -15,6 +15,7 @@ type segmentReader struct {
 	f             *os.File
 	r             *bufio.Reader
 	hash          xxhash.Digest
+	magic         uint64
 	seg           uint32
 	rec           uint64
 	ts            uint64
@@ -24,6 +25,8 @@ type segmentReader struct {
 	committedTS   uint64
 	committedSize int64
 	data          []byte
+	isFinal       bool
+	isSealed      bool
 }
 
 func verifySegment(j *Journal, f *os.File, fileName string) (*segmentReader, error) {
@@ -40,6 +43,27 @@ func verifySegment(j *Journal, f *os.File, fileName string) (*segmentReader, err
 			return sr, err
 		}
 	}
+}
+
+func openSegment(j *Journal, fileName string) (*os.File, *segmentReader, error) {
+	f, err := j.openFile(fileName, false)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, errFileGone
+		}
+		return nil, nil, err
+	}
+
+	var ok bool
+	defer closeUnlessOK(f, &ok)
+
+	r, err := newSegmentReader(j, f, fileName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ok = true
+	return f, r, nil
 }
 
 func newSegmentReader(j *Journal, f *os.File, fileName string) (*segmentReader, error) {
@@ -69,6 +93,8 @@ func newSegmentReader(j *Journal, f *os.File, fileName string) (*segmentReader, 
 	}
 	sr.size = int64(segmentHeaderSize)
 	sr.committedSize = int64(segmentHeaderSize)
+	sr.isFinal = (h.Magic == magicV1Final || h.Magic == magicV1Sealed)
+	sr.isSealed = (h.Magic == magicV1Sealed)
 	return sr, nil
 }
 
@@ -199,11 +225,11 @@ func (sr *segmentReader) readHeader(h *segmentHeader) error {
 		panic("internal size mismatch")
 	}
 
-	sr.hash.Write(buf[:segmentHeaderSize-8])
+	sr.hash.Write(buf[8 : segmentHeaderSize-8])
 	checksum := sr.hash.Sum64()
 	sr.hash.Write(buf[segmentHeaderSize-8 : segmentHeaderSize])
 
-	if h.Magic != magicV1Draft {
+	if h.Magic != magicV1Draft && h.Magic != magicV1Final && h.Magic != magicV1Sealed {
 		if sr.j.verbose {
 			sr.j.logger.Debug("incompatible header: version", "journal", sr.j.debugName)
 		}

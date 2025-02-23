@@ -22,7 +22,7 @@ type segmentWriter struct {
 	modified    bool
 }
 
-func startSegment(j *Journal, seg uint32, ts uint64, rec uint64, prevChecksum uint64) (*segmentWriter, error) {
+func startSegment(j *Journal, seg uint32, ts uint64, rec uint64) (*segmentWriter, error) {
 	name := formatSegmentName(j.fileNamePrefix, j.fileNameSuffix, seg, ts, rec)
 
 	f, err := j.openFile(name, true)
@@ -45,7 +45,7 @@ func startSegment(j *Journal, seg uint32, ts uint64, rec uint64, prevChecksum ui
 	sw.hash.Reset()
 
 	var hbuf [segmentHeaderSize]byte
-	fillSegmentHeader(hbuf[:], j, magicV1Draft, seg, ts, rec, prevChecksum, &sw.hash)
+	fillSegmentHeader(hbuf[:], j, magicV1Draft, seg, ts, rec, &sw.hash)
 
 	_, err = f.Write(hbuf[:])
 	if err != nil {
@@ -174,20 +174,61 @@ func (sw *segmentWriter) commit() error {
 	return nil
 }
 
-func (sw *segmentWriter) close() error {
-	if sw.f == nil {
-		return nil
-	}
+func (sw *segmentWriter) finalizeAndClose() error {
+	defer func() {
+		sw.f.Close()
+		sw.f = nil
+	}()
+
 	err := sw.commit()
+	if err != nil {
+		return err
+	}
+
+	_, err = sw.f.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
+
+	var magic [8]byte
+	binary.LittleEndian.PutUint64(magic[:], magicV1Final)
+	_, err = sw.f.Write(magic[:])
+	if err != nil {
+		return err
+	}
+
 	if sw.modified {
 		err := sw.f.Sync()
 		if err != nil {
 			sw.j.fsyncFailed(err)
+			return err
+		}
+		sw.modified = false
+	}
+
+	return nil
+}
+
+func (sw *segmentWriter) close() error {
+	if sw.f == nil {
+		return nil
+	}
+	defer func() {
+		sw.f.Close()
+		sw.f = nil
+	}()
+	err := sw.commit()
+	if err != nil {
+		return err
+	}
+	if sw.modified {
+		err := sw.f.Sync()
+		if err != nil {
+			sw.j.fsyncFailed(err)
+			return err
 		}
 	}
-	sw.f.Close()
-	sw.f = nil
-	return err
+	return nil
 }
 
 func (sw *segmentWriter) checksum() uint64 {
