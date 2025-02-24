@@ -197,8 +197,7 @@ func (sw *segmentWriter) close(mode closeMode) error {
 		if sw.modified {
 			err := sw.f.Sync()
 			if err != nil {
-				sw.j.fsyncFailed(err)
-				return err
+				return &fsyncFailedError{Cause: err}
 			}
 		}
 
