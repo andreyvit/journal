@@ -85,6 +85,7 @@ type Options struct {
 	JournalInvariant [32]byte
 	SegmentInvariant [32]byte
 	Autorotate       AutorotateOptions
+	Autocommit       AutocommitOptions
 
 	Context context.Context
 	Logger  *slog.Logger
@@ -94,6 +95,10 @@ type Options struct {
 }
 
 type AutorotateOptions struct {
+	Interval time.Duration
+}
+
+type AutocommitOptions struct {
 	Interval time.Duration
 }
 
@@ -114,6 +119,7 @@ type Journal struct {
 	segmentInvariant [32]byte
 	onChange         func()
 	autorotate       AutorotateOptions
+	autocommit       AutocommitOptions
 
 	state  journalState
 	writer journalWriter
@@ -153,6 +159,7 @@ func New(dir string, o Options) *Journal {
 		logger:           o.Logger,
 		onChange:         o.OnChange,
 		autorotate:       o.Autorotate,
+		autocommit:       o.Autocommit,
 	}
 	j.writer.j = j
 	return j
@@ -209,6 +216,10 @@ func (j *Journal) Autorotate(now uint64) (bool, error) {
 
 func (j *Journal) WriteRecord(timestamp uint64, data []byte) error {
 	return j.writer.WriteRecord(timestamp, data)
+}
+
+func (j *Journal) Autocommit(now uint64) (bool, error) {
+	return j.writer.Autocommit(now)
 }
 
 func (j *Journal) Commit() error {

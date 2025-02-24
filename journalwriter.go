@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 )
 
 type closeMode int
@@ -153,8 +154,10 @@ func (jw *journalWriter) WriteRecord(timestamp uint64, data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
+	var now uint64
 	if timestamp == 0 {
-		timestamp = jw.j.Now()
+		now = jw.j.Now()
+		timestamp = now
 	}
 
 	jw.writeLock.Lock()
@@ -189,7 +192,34 @@ func (jw *journalWriter) WriteRecord(timestamp uint64, data []byte) error {
 		jw.segWriter = sw
 	}
 
+	if !jw.segWriter.uncommitted {
+		if now == 0 {
+			now = jw.j.Now()
+		}
+		jw.segWriter.firstUncommittedWriteTS = now
+	}
+
 	return jw.fail(jw.segWriter.writeRecord(timestamp, data))
+}
+
+func (jw *journalWriter) Autocommit(now uint64) (bool, error) {
+	dur := jw.j.autocommit.Interval
+	if dur == 0 {
+		return false, nil
+	}
+	jw.writeLock.Lock()
+	defer jw.writeLock.Unlock()
+	if jw.segWriter == nil {
+		return false, nil
+	}
+	if !jw.segWriter.uncommitted {
+		return false, nil
+	}
+	elapsed := time.Duration(now-jw.segWriter.firstUncommittedWriteTS) * time.Millisecond
+	if elapsed < dur {
+		return false, nil
+	}
+	return true, jw.fail(jw.segWriter.commit())
 }
 
 func (jw *journalWriter) Commit() error {

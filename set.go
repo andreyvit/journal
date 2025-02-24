@@ -69,7 +69,14 @@ func (set *Set) Process(ctx context.Context) int {
 		if ctx.Err() != nil {
 			return actions
 		}
-		ok, err := j.Autorotate(now)
+		ok, err := j.Autocommit(now)
+		if err != nil {
+			j.logger.Error("commit error", "err", err)
+			continue
+		} else if ok {
+			actions++
+		}
+		ok, err = j.Autorotate(now)
 		if err != nil {
 			j.logger.Error("autorotate error", "err", err)
 		} else if ok {

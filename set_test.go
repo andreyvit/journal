@@ -21,6 +21,9 @@ func TestSet(t *testing.T) {
 		Autorotate: journal.AutorotateOptions{
 			Interval: 1 * time.Hour,
 		},
+		Autocommit: journal.AutocommitOptions{
+			Interval: 10 * time.Second,
+		},
 	})
 	set.Add(j1.Journal)
 
@@ -28,6 +31,9 @@ func TestSet(t *testing.T) {
 		MaxFileSize: 160,
 		Autorotate: journal.AutorotateOptions{
 			Interval: 30 * time.Minute,
+		},
+		Autocommit: journal.AutocommitOptions{
+			Interval: 10 * time.Second,
 		},
 	})
 	set.Add(j2.Journal)
@@ -39,6 +45,9 @@ func TestSet(t *testing.T) {
 	ensure(j1.WriteRecord(0, []byte("boo")))
 
 	eq(t, set.Process(context.Background()), 0)
+
+	clock.Advance(time.Minute)
+	eq(t, set.Process(context.Background()), 2)
 
 	clock.Advance(time.Hour)
 	eq(t, set.Process(context.Background()), 2)

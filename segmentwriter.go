@@ -20,6 +20,8 @@ type segmentWriter struct {
 	dataHash    xxhash.Digest
 	uncommitted bool
 	modified    bool
+
+	firstUncommittedWriteTS uint64
 }
 
 func startSegment(j *Journal, segnum uint32, ts uint64, rec uint64) (*segmentWriter, error) {
