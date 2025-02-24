@@ -5,8 +5,6 @@ import (
 	"io"
 	"iter"
 	"os"
-	"slices"
-	"strings"
 	"time"
 )
 
@@ -15,13 +13,8 @@ var ErrInternal = errors.New("journal: internal error")
 type Filter struct {
 	MinRecordID  uint64
 	MinTimestamp uint64
-}
-
-type segmentInfo struct {
-	name     string
-	startTS  uint64
-	startRec uint64
-	segment  uint32
+	MaxRecordID  uint64
+	MaxTimestamp uint64
 }
 
 type Record struct {
@@ -37,13 +30,13 @@ func (rec *Record) Time() time.Time {
 type Cursor struct {
 	Record
 
-	closed           bool
-	j                *Journal
-	filter           Filter
-	err              error
-	segmentFileNames []string
-	file             *os.File
-	reader           *segmentReader
+	closed   bool
+	j        *Journal
+	filter   Filter
+	err      error
+	segments []Segment
+	file     *os.File
+	reader   *segmentReader
 }
 
 func (j *Journal) Read(filter Filter) *Cursor {
@@ -53,46 +46,6 @@ func (j *Journal) Read(filter Filter) *Cursor {
 		file:   nil,
 		reader: nil,
 	}
-}
-
-func (j *Journal) FindSegments(filter Filter) ([]string, error) {
-	dirf, err := os.Open(j.dir)
-	if err != nil {
-		return nil, err
-	}
-	defer dirf.Close()
-
-	var names []string
-	for {
-		ents, err := dirf.ReadDir(16)
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			return nil, err
-		}
-
-		for _, ent := range ents {
-			if !ent.Type().IsRegular() {
-				continue
-			}
-			name := ent.Name()
-			if !strings.HasPrefix(name, j.fileNamePrefix) || !strings.HasSuffix(name, j.fileNameSuffix) {
-				continue
-			}
-
-			_, ts, rec, err := parseSegmentName(j.fileNamePrefix, j.fileNameSuffix, name)
-			if err != nil {
-				return nil, err
-			}
-
-			if rec >= filter.MinRecordID && ts >= filter.MinTimestamp {
-				names = append(names, name)
-			}
-		}
-	}
-
-	slices.Sort(names)
-	return names, nil
 }
 
 func (c *Cursor) Close() {
@@ -127,9 +80,9 @@ func (c *Cursor) closeFile() {
 }
 
 func (c *Cursor) next() error {
-	if c.segmentFileNames == nil {
+	if c.segments == nil {
 		var err error
-		c.segmentFileNames, err = c.j.FindSegments(c.filter)
+		c.segments, err = c.j.FindSegments(c.filter)
 		if err != nil {
 			return err
 		}
@@ -137,14 +90,14 @@ func (c *Cursor) next() error {
 
 	for {
 		if c.reader == nil {
-			if len(c.segmentFileNames) == 0 {
+			if len(c.segments) == 0 {
 				return io.EOF
 			}
-			nextFileName := c.segmentFileNames[0]
-			c.segmentFileNames = c.segmentFileNames[1:]
+			seg := c.segments[0]
+			c.segments = c.segments[1:]
 
 			var err error
-			c.file, c.reader, err = openSegment(c.j, nextFileName)
+			c.file, c.reader, err = openSegment(c.j, seg)
 			if err != nil {
 				return err
 			}

@@ -63,8 +63,6 @@ package journal
 import (
 	"context"
 	"fmt"
-	"io"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -90,8 +88,9 @@ type Options struct {
 
 	Context context.Context
 	Logger  *slog.Logger
-	OnLoad  func()
 	Verbose bool
+
+	OnChange func()
 }
 
 const DefaultMaxFileSize = 10 * 1024 * 1024
@@ -110,6 +109,7 @@ type Journal struct {
 	writable         bool
 	journalInvariant [32]byte
 	segmentInvariant [32]byte
+	onChange         func()
 
 	writeLock sync.Mutex
 	writeErr  error
@@ -148,6 +148,7 @@ func New(dir string, o Options) *Journal {
 		journalInvariant: o.JournalInvariant,
 		segmentInvariant: o.SegmentInvariant,
 		logger:           o.Logger,
+		onChange:         o.OnChange,
 	}
 }
 
@@ -178,41 +179,52 @@ func (j *Journal) StartWriting() {
 }
 
 func (j *Journal) prepareToWrite_locked() error {
+	var failed Segment
+	for {
+		last, err := j.prepareToWrite_locked_once(failed)
+		if err == errFileGone {
+			failed = last
+			continue
+		}
+		return err
+	}
+}
+
+func (j *Journal) prepareToWrite_locked_once(failed Segment) (Segment, error) {
 	dirf, err := os.Open(j.dir)
 	if err != nil {
-		return err
+		return Segment{}, err
 	}
 	defer dirf.Close()
 
 	ds, err := dirf.Stat()
 	if err != nil {
-		return err
+		return Segment{}, err
 	}
 	if !ds.IsDir() {
-		return fmt.Errorf("%v: not a directory", j.debugName)
+		return Segment{}, fmt.Errorf("%v: not a directory", j.debugName)
 	}
 
-	var failedName string
-retry:
-	lastName := j.findLastFile(dirf)
+	last, err := j.findLastSegment(dirf)
+	if err != nil {
+		return Segment{}, err
+	}
 	if j.verbose {
-		j.logger.Debug("journal last file", "journal", j.debugName, "file", lastName)
+		j.logger.Debug("journal last file", "journal", j.debugName, "file", last)
 	}
-	if lastName == "" {
-		return nil
+	if last.IsZero() {
+		return Segment{}, nil
 	}
-	if lastName == failedName {
-		return fmt.Errorf("journal: failed twice to continue with segment file %s", lastName)
+	if last == failed {
+		return Segment{}, fmt.Errorf("journal: failed twice to continue with segment file %v", last)
 	}
 
-	sw, err := continueSegment(j, lastName)
-	if err == errFileGone {
-		goto retry
-	} else if err != nil {
-		return err
+	sw, err := continueSegment(j, last)
+	if err != nil {
+		return last, err
 	}
 	j.segWriter = sw
-	return nil
+	return last, nil
 }
 
 func (j *Journal) ensurePreparedToWrite_locked() error {
@@ -230,17 +242,38 @@ func (j *Journal) ensurePreparedToWrite_locked() error {
 	return nil
 }
 
+type closeMode int
+
+const (
+	closeAndContinueLater closeMode = iota
+	closeWithoutCommitting
+	closeAndFinalize
+)
+
+func (m closeMode) shouldCommit() bool {
+	return m != closeWithoutCommitting
+}
+func (m closeMode) shouldFinalize() bool {
+	return m == closeAndFinalize
+}
+
 func (j *Journal) FinishWriting() error {
 	j.writeLock.Lock()
 	defer j.writeLock.Unlock()
-	return j.finishWriting_locked()
+	return j.finishWriting_locked(closeAndContinueLater)
 }
 
-func (j *Journal) finishWriting_locked() error {
+func (j *Journal) Rotate() error {
+	j.writeLock.Lock()
+	defer j.writeLock.Unlock()
+	return j.finishWriting_locked(closeAndFinalize)
+}
+
+func (j *Journal) finishWriting_locked(mode closeMode) error {
 	j.writable = false
 	var err error
 	if j.segWriter != nil {
-		err = j.segWriter.close()
+		err = j.segWriter.close(mode)
 		j.segWriter = nil
 	}
 	return err
@@ -253,7 +286,7 @@ func (j *Journal) fail(err error) error {
 
 	j.logger.LogAttrs(j.context, slog.LevelError, "journal: failed", slog.String("journal", j.debugName), slog.Any("err", err))
 
-	j.finishWriting_locked()
+	j.finishWriting_locked(closeWithoutCommitting)
 
 	if j.writeErr != nil {
 		j.writeErr = err
@@ -270,42 +303,13 @@ func (j *Journal) fsyncFailed(err error) {
 func (j *Journal) filePath(name string) string {
 	return filepath.Join(j.dir, name)
 }
-func (j *Journal) openFile(name string, writable bool) (*os.File, error) {
+func (j *Journal) openFile(seg Segment, writable bool) (*os.File, error) {
+	name := seg.fileName(j)
 	if writable {
 		return os.OpenFile(j.filePath(name), os.O_RDWR|os.O_CREATE, 0o666)
 	} else {
 		return os.Open(j.filePath(name))
 	}
-}
-
-func (j *Journal) findLastFile(dirf fs.ReadDirFile) string {
-	var lastName string
-	for {
-		if err := j.context.Err(); err != nil {
-			break
-		}
-
-		ents, err := dirf.ReadDir(16)
-		if err == io.EOF {
-			break
-		}
-		for _, ent := range ents {
-			if !ent.Type().IsRegular() {
-				continue
-			}
-			name := ent.Name()
-			if !strings.HasPrefix(name, j.fileNamePrefix) {
-				continue
-			}
-			if !strings.HasSuffix(name, j.fileNameSuffix) {
-				continue
-			}
-			if name > lastName {
-				lastName = name
-			}
-		}
-	}
-	return lastName
 }
 
 func (j *Journal) WriteRecord(timestamp uint64, data []byte) error {
@@ -324,18 +328,18 @@ func (j *Journal) WriteRecord(timestamp uint64, data []byte) error {
 		return nil
 	}
 
-	var seg uint32
-	var rec uint64
+	var segnum uint32
+	var recnum uint64
 	if j.segWriter == nil {
-		seg = 1
-		rec = 1
+		segnum = 1
+		recnum = 1
 	} else if j.segWriter.shouldRotate(len(data)) {
 		if j.verbose {
 			j.logger.Debug("rotating segment", "journal", j.debugName, "segment", j.segWriter.seg, "segment_size", j.segWriter.size, "data_size", len(data))
 		}
-		seg = j.segWriter.seg + 1
-		rec = j.segWriter.nextRec
-		err := j.segWriter.finalizeAndClose()
+		segnum = j.segWriter.seg.segnum + 1
+		recnum = j.segWriter.nextRec
+		err := j.segWriter.close(closeAndFinalize)
 		if err != nil {
 			return err
 		}
@@ -344,9 +348,9 @@ func (j *Journal) WriteRecord(timestamp uint64, data []byte) error {
 
 	if j.segWriter == nil {
 		if j.verbose {
-			j.logger.Debug("starting segment", "journal", j.debugName, "segment", seg, "record", rec)
+			j.logger.Debug("starting segment", "journal", j.debugName, "segment", segnum, "record", recnum)
 		}
-		sw, err := startSegment(j, seg, timestamp, rec)
+		sw, err := startSegment(j, segnum, timestamp, recnum)
 		if err != nil {
 			return j.fail(err)
 		}

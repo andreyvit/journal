@@ -13,7 +13,7 @@ import (
 type segmentWriter struct {
 	j           *Journal
 	f           *os.File
-	seg         uint32
+	seg         Segment
 	ts          uint64
 	nextRec     uint64
 	size        int64
@@ -22,10 +22,15 @@ type segmentWriter struct {
 	modified    bool
 }
 
-func startSegment(j *Journal, seg uint32, ts uint64, rec uint64) (*segmentWriter, error) {
-	name := formatSegmentName(j.fileNamePrefix, j.fileNameSuffix, seg, ts, rec)
+func startSegment(j *Journal, segnum uint32, ts uint64, rec uint64) (*segmentWriter, error) {
+	seg := Segment{
+		ts:     ts,
+		recnum: rec,
+		segnum: segnum,
+		status: Draft,
+	}
 
-	f, err := j.openFile(name, true)
+	f, err := j.openFile(seg, true)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +50,7 @@ func startSegment(j *Journal, seg uint32, ts uint64, rec uint64) (*segmentWriter
 	sw.hash.Reset()
 
 	var hbuf [segmentHeaderSize]byte
-	fillSegmentHeader(hbuf[:], j, magicV1Draft, seg, ts, rec, &sw.hash)
+	fillSegmentHeader(hbuf[:], j, magicV1Draft, segnum, ts, rec, &sw.hash)
 
 	_, err = f.Write(hbuf[:])
 	if err != nil {
@@ -56,8 +61,8 @@ func startSegment(j *Journal, seg uint32, ts uint64, rec uint64) (*segmentWriter
 	return sw, nil
 }
 
-func continueSegment(j *Journal, fileName string) (*segmentWriter, error) {
-	f, err := j.openFile(fileName, true)
+func continueSegment(j *Journal, seg Segment) (*segmentWriter, error) {
+	f, err := j.openFile(seg, true)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, errFileGone
@@ -67,9 +72,10 @@ func continueSegment(j *Journal, fileName string) (*segmentWriter, error) {
 	var ok bool
 	defer closeUnlessOK(f, &ok)
 
-	sr, err := verifySegment(j, f, fileName)
+	sr, err := verifySegment(j, f, seg)
 	if err == errCorruptedFile {
 		if sr == nil || sr.committedRec == 0 {
+			fileName := seg.fileName(j)
 			j.logger.LogAttrs(j.context, slog.LevelWarn, "journal: deleting completely corrupted file", slog.String("journal", j.debugName), slog.String("file", fileName))
 			err := os.Remove(j.filePath(fileName))
 			if err != nil {
@@ -77,7 +83,7 @@ func continueSegment(j *Journal, fileName string) (*segmentWriter, error) {
 			}
 			return nil, errFileGone
 		} else {
-			j.logger.LogAttrs(j.context, slog.LevelWarn, "journal: recovered corrupted file", slog.String("journal", j.debugName), slog.String("file", fileName), slog.Int("record", int(sr.committedRec)))
+			j.logger.LogAttrs(j.context, slog.LevelWarn, "journal: recovered corrupted file", slog.String("journal", j.debugName), slog.String("segment", seg.String()), slog.Int("record", int(sr.committedRec)))
 			err := f.Truncate(sr.committedSize)
 			if err != nil {
 				return nil, fmt.Errorf("journal: failed to truncate corrupted file: %w", err)
@@ -89,10 +95,10 @@ func continueSegment(j *Journal, fileName string) (*segmentWriter, error) {
 			}
 
 			if sr.j.verbose {
-				sr.j.logger.Debug("segment recovered", "journal", sr.j.debugName, "file", fileName)
+				sr.j.logger.Debug("segment recovered", "journal", sr.j.debugName, "segment", seg.String())
 			}
 
-			sr, err = verifySegment(j, f, fileName)
+			sr, err = verifySegment(j, f, seg)
 			if err == errCorruptedFile {
 				return nil, fmt.Errorf("journal: failured to recover corrupted file")
 			} else if err != nil {
@@ -174,42 +180,7 @@ func (sw *segmentWriter) commit() error {
 	return nil
 }
 
-func (sw *segmentWriter) finalizeAndClose() error {
-	defer func() {
-		sw.f.Close()
-		sw.f = nil
-	}()
-
-	err := sw.commit()
-	if err != nil {
-		return err
-	}
-
-	_, err = sw.f.Seek(0, io.SeekStart)
-	if err != nil {
-		return err
-	}
-
-	var magic [8]byte
-	binary.LittleEndian.PutUint64(magic[:], magicV1Final)
-	_, err = sw.f.Write(magic[:])
-	if err != nil {
-		return err
-	}
-
-	if sw.modified {
-		err := sw.f.Sync()
-		if err != nil {
-			sw.j.fsyncFailed(err)
-			return err
-		}
-		sw.modified = false
-	}
-
-	return nil
-}
-
-func (sw *segmentWriter) close() error {
+func (sw *segmentWriter) close(mode closeMode) error {
 	if sw.f == nil {
 		return nil
 	}
@@ -217,17 +188,35 @@ func (sw *segmentWriter) close() error {
 		sw.f.Close()
 		sw.f = nil
 	}()
-	err := sw.commit()
-	if err != nil {
-		return err
-	}
-	if sw.modified {
-		err := sw.f.Sync()
+
+	if mode.shouldCommit() {
+		err := sw.commit()
 		if err != nil {
-			sw.j.fsyncFailed(err)
 			return err
 		}
+		if sw.modified {
+			err := sw.f.Sync()
+			if err != nil {
+				sw.j.fsyncFailed(err)
+				return err
+			}
+		}
+
+		if mode.shouldFinalize() && sw.seg.status == Draft {
+			oldFileName := sw.seg.fileName(sw.j)
+			sw.seg.status = Finalized
+			newFileName := sw.seg.fileName(sw.j)
+
+			oldPath := sw.j.filePath(oldFileName)
+			newPath := sw.j.filePath(newFileName)
+
+			err = os.Rename(oldPath, newPath)
+			if err != nil {
+				return err
+			}
+		}
 	}
+
 	return nil
 }
 

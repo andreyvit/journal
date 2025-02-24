@@ -1,10 +1,8 @@
 package journal_test
 
 import (
-	"bytes"
 	"fmt"
 	"log"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +12,6 @@ import (
 )
 
 const draft = "'JOURNLAD"
-const final = "'JOURNLAF"
 const sealed = "'JOURNLAS"
 const filler = "0*32/journal_inv 0*32/seg_inv 0...*3/reserved"
 
@@ -26,6 +23,17 @@ func TestJournalFlow_simple(t *testing.T) {
 	j.Advance(1 * time.Second)
 	ensure(j.WriteRecord(0, []byte("w")))
 	ensure(j.FinishWriting())
+
+	deepEq(t, j.FileNames(), []string{
+		"jW0000000001-20240101T000000000-000000000001.wal",
+	})
+
+	j.StartWriting()
+	ensure(j.Rotate())
+
+	deepEq(t, j.FileNames(), []string{
+		"jF0000000001-20240101T000000000-000000000001.wal",
+	})
 
 	recs := j.All(journal.Filter{})
 	eq(t, len(recs), 2)
@@ -58,7 +66,7 @@ func TestJournalFlow_large(t *testing.T) {
 	}
 
 	deepEq(t, j.FileNames(), []string{
-		"j0000000001-20240101T000000000-000000000001.wal", "j0000000002-20240101T001640001-000000000005.wal", "j0000000003-20240101T001640026-000000000006.wal", "j0000000004-20240101T001640076-000000000008.wal", "j0000000005-20240101T001640126-000000000010.wal", "j0000000006-20240101T001640176-000000000012.wal", "j0000000007-20240101T001640226-000000000014.wal",
+		"jF0000000001-20240101T000000000-000000000001.wal", "jF0000000002-20240101T001640001-000000000005.wal", "jF0000000003-20240101T001640026-000000000006.wal", "jF0000000004-20240101T001640076-000000000008.wal", "jF0000000005-20240101T001640126-000000000010.wal", "jF0000000006-20240101T001640176-000000000012.wal", "jW0000000007-20240101T001640226-000000000014.wal",
 	})
 
 	expected := []string{"hello", "w", "foo", "bar boz", huge, "record 0", "record 1", "record 2", "record 3", "record 4", "record 5", "record 6", "record 7", "record 8", "record 9"}
@@ -90,16 +98,16 @@ func TestJournalInternals(t *testing.T) {
 
 	files := j.FileNames()
 	deepEq(t, files, []string{
-		"j0000000001-20240101T000000000-000000000001.wal",
+		"jW0000000001-20240101T000000000-000000000001.wal",
 	})
 
 	start1 := concat(
 		"1../seg 0.. 00_f4_51_c2_8c_01.../ts 1.../rec",
-		filler, "83 f0 bd a6 8e dd 4e 12",
+		filler, "e5e8c2d95fbf79a1",
 		"#10 #0 'hello",
 		"#2 #0 'w",
 		"#8 #1000000 'orld",
-		"75326e471d647d86",
+		"b13af5c6fe2b3b 6f",
 	)
 	j.Eq(files[0], draft, start1)
 
@@ -113,27 +121,27 @@ func TestJournalInternals(t *testing.T) {
 
 	files = j.FileNames()
 	deepEq(t, files, []string{
-		"j0000000001-20240101T000000000-000000000001.wal",
-		"j0000000002-20240101T001650000-000000000005.wal",
+		"jF0000000001-20240101T000000000-000000000001.wal",
+		"jW0000000002-20240101T001650000-000000000005.wal",
 	})
 
 	j.Eq(files[0],
-		final, start1,
+		draft, start1,
 		"#6 #10000 'foo",
-		"d3e69e10e8f880dc",
+		"550a7e6d7e9ffbfa",
 	)
 
 	prestart2 := concat("2../seg 0.. 505d61c28c01.../ts 5.../rec", filler,
-		"566d2528bc3aec7b")
+		"3b5e5a292ac3d51e")
 	start2 := concat(
 		prestart2,
 		"#18 #0 'boooooooo",
-		"9914961c4576876f",
+		"4793427cfcf49ae0",
 	)
 	j.Eq(files[1],
 		draft, start2,
 		"#8 #0 'wooo",
-		"c5ecfe43c69a3b35",
+		"bddd2aaa4d525004",
 	)
 
 	// recovery: missing checksum + continue writing
@@ -145,7 +153,7 @@ func TestJournalInternals(t *testing.T) {
 	ensure(j.FinishWriting())
 	j.Eq(files[1], draft, start2,
 		"#2 #0 'x",
-		"eb4859854aae0dbe")
+		"233ced0d2205baa9")
 
 	// recovery: no commit
 	j.Put(files[1], draft, start2,
@@ -173,7 +181,7 @@ func TestJournalInternals(t *testing.T) {
 	ensure(j.FinishWriting())
 	files = j.FileNames()
 	deepEq(t, files, []string{
-		"j0000000001-20240101T000000000-000000000001.wal",
+		"jF0000000001-20240101T000000000-000000000001.wal",
 	})
 
 	// ...and can continue writing
@@ -183,51 +191,11 @@ func TestJournalInternals(t *testing.T) {
 	ensure(j.FinishWriting())
 	files = j.FileNames()
 	deepEq(t, files, []string{
-		"j0000000001-20240101T000000000-000000000001.wal",
-		"j0000000002-20240101T001650000-000000000005.wal",
+		"jF0000000001-20240101T000000000-000000000001.wal",
+		"jW0000000002-20240101T001650000-000000000005.wal",
 	})
 	j.Eq(files[1], draft, start2,
 		"#2 #0 'x",
-		"eb4859854aae0dbe",
+		"233ced0d2205baa9",
 	)
-}
-
-func concat(items ...string) string {
-	return strings.Join(items, " ")
-}
-
-func eq[T comparable](t testing.TB, a, e T) {
-	if a != e {
-		t.Helper()
-		t.Fatalf("** got %v, wanted %v", a, e)
-	}
-}
-
-func eqstr(t testing.TB, a, e []byte) {
-	if !bytes.Equal(a, e) {
-		t.Helper()
-		t.Fatalf("** got %q, wanted %q", a, e)
-	}
-}
-
-func deepEq[T any](t testing.TB, a, e T) bool {
-	if !reflect.DeepEqual(a, e) {
-		t.Helper()
-		t.Errorf("** got %v, wanted %v", a, e)
-		return false
-	}
-	return true
-}
-
-func must[T any](v T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
-
-func ensure(err error) {
-	if err != nil {
-		panic(err)
-	}
 }

@@ -291,7 +291,7 @@ func BytesEq(t testing.TB, a, e []byte) bool {
 		}
 
 		t.Helper()
-		t.Errorf("** got:\n%v\nwanted:\n%v\nfirst difference offset: 0x%x (%d)", HexDump(a, off), HexDump(e, off), off, off)
+		t.Fatalf("** got:\n%v\nwanted:\n%v\nfirst difference offset: 0x%x (%d)", HexDump(a, off), HexDump(e, off), off, off)
 		return false
 	}
 	return true

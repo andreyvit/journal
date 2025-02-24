@@ -15,8 +15,7 @@ type segmentReader struct {
 	f             *os.File
 	r             *bufio.Reader
 	hash          xxhash.Digest
-	magic         uint64
-	seg           uint32
+	seg           Segment
 	rec           uint64
 	ts            uint64
 	size          int64
@@ -25,12 +24,10 @@ type segmentReader struct {
 	committedTS   uint64
 	committedSize int64
 	data          []byte
-	isFinal       bool
-	isSealed      bool
 }
 
-func verifySegment(j *Journal, f *os.File, fileName string) (*segmentReader, error) {
-	sr, err := newSegmentReader(j, f, fileName)
+func verifySegment(j *Journal, f *os.File, seg Segment) (*segmentReader, error) {
+	sr, err := newSegmentReader(j, f, seg)
 	if err != nil {
 		return sr, err
 	}
@@ -45,8 +42,8 @@ func verifySegment(j *Journal, f *os.File, fileName string) (*segmentReader, err
 	}
 }
 
-func openSegment(j *Journal, fileName string) (*os.File, *segmentReader, error) {
-	f, err := j.openFile(fileName, false)
+func openSegment(j *Journal, seg Segment) (*os.File, *segmentReader, error) {
+	f, err := j.openFile(seg, false)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil, errFileGone
@@ -57,7 +54,7 @@ func openSegment(j *Journal, fileName string) (*os.File, *segmentReader, error) 
 	var ok bool
 	defer closeUnlessOK(f, &ok)
 
-	r, err := newSegmentReader(j, f, fileName)
+	r, err := newSegmentReader(j, f, seg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -66,19 +63,14 @@ func openSegment(j *Journal, fileName string) (*os.File, *segmentReader, error) 
 	return f, r, nil
 }
 
-func newSegmentReader(j *Journal, f *os.File, fileName string) (*segmentReader, error) {
-	seg, ts, rec, err := parseSegmentName(j.fileNamePrefix, j.fileNameSuffix, fileName)
-	if err != nil {
-		return nil, errCorruptedFile
-	}
-
+func newSegmentReader(j *Journal, f *os.File, seg Segment) (*segmentReader, error) {
 	sr := &segmentReader{
 		j:             j,
 		f:             f,
 		r:             bufio.NewReader(f),
 		seg:           seg,
-		rec:           rec - 1,
-		ts:            ts,
+		rec:           seg.recnum - 1,
+		ts:            seg.ts,
 		size:          0,
 		committedRec:  0,
 		committedTS:   0,
@@ -87,14 +79,12 @@ func newSegmentReader(j *Journal, f *os.File, fileName string) (*segmentReader, 
 	sr.hash.Reset()
 
 	var h segmentHeader
-	err = sr.readHeader(&h)
+	err := sr.readHeader(&h, seg.status)
 	if err != nil {
 		return sr, err
 	}
 	sr.size = int64(segmentHeaderSize)
 	sr.committedSize = int64(segmentHeaderSize)
-	sr.isFinal = (h.Magic == magicV1Final || h.Magic == magicV1Sealed)
-	sr.isSealed = (h.Magic == magicV1Sealed)
 	return sr, nil
 }
 
@@ -209,7 +199,7 @@ func (sr *segmentReader) next() error {
 	}
 }
 
-func (sr *segmentReader) readHeader(h *segmentHeader) error {
+func (sr *segmentReader) readHeader(h *segmentHeader, status Status) error {
 	var buf [segmentHeaderSize]byte
 	_, err := io.ReadFull(sr.r, buf[:])
 	if err == io.ErrUnexpectedEOF || err == io.EOF {
@@ -225,15 +215,30 @@ func (sr *segmentReader) readHeader(h *segmentHeader) error {
 		panic("internal size mismatch")
 	}
 
-	sr.hash.Write(buf[8 : segmentHeaderSize-8])
+	sr.hash.Write(buf[:segmentHeaderSize-8])
 	checksum := sr.hash.Sum64()
 	sr.hash.Write(buf[segmentHeaderSize-8 : segmentHeaderSize])
 
-	if h.Magic != magicV1Draft && h.Magic != magicV1Final && h.Magic != magicV1Sealed {
+	if h.Magic != magicV1Draft && h.Magic != magicV1Sealed {
 		if sr.j.verbose {
 			sr.j.logger.Debug("incompatible header: version", "journal", sr.j.debugName)
 		}
 		return ErrUnsupportedVersion
+	}
+	if status.IsSealed() {
+		if h.Magic != magicV1Sealed {
+			if sr.j.verbose {
+				sr.j.logger.Debug("wrong header magic: unsealed format in a sealed file", "journal", sr.j.debugName)
+			}
+			return errCorruptedFile
+		}
+	} else {
+		if h.Magic != magicV1Draft {
+			if sr.j.verbose {
+				sr.j.logger.Debug("wrong header magic: sealed format in an unsealed file", "journal", sr.j.debugName)
+			}
+			return errCorruptedFile
+		}
 	}
 	if checksum != h.HeaderChecksum {
 		if sr.j.verbose {
@@ -241,7 +246,7 @@ func (sr *segmentReader) readHeader(h *segmentHeader) error {
 		}
 		return errCorruptedFile
 	}
-	if sr.seg != h.SegmentOrdinal {
+	if sr.seg.segnum != h.SegmentNumber {
 		if sr.j.verbose {
 			sr.j.logger.Debug("corrupted header: segment ordinal", "journal", sr.j.debugName)
 		}
@@ -253,7 +258,7 @@ func (sr *segmentReader) readHeader(h *segmentHeader) error {
 		}
 		return errCorruptedFile
 	}
-	if sr.rec+1 != h.RecordOrdinal {
+	if sr.rec+1 != h.RecordNumber {
 		if sr.j.verbose {
 			sr.j.logger.Debug("corrupted header: record ordinal", "journal", sr.j.debugName)
 		}
