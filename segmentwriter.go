@@ -17,7 +17,7 @@ type segmentWriter struct {
 	ts          uint64
 	nextRec     uint64
 	size        int64
-	hash        xxhash.Digest
+	dataHash    xxhash.Digest
 	uncommitted bool
 	modified    bool
 }
@@ -47,10 +47,10 @@ func startSegment(j *Journal, segnum uint32, ts uint64, rec uint64) (*segmentWri
 		size:     segmentHeaderSize,
 		modified: true,
 	}
-	sw.hash.Reset()
+	sw.dataHash.Reset()
 
 	var hbuf [segmentHeaderSize]byte
-	fillSegmentHeader(hbuf[:], j, magicV1Draft, segnum, ts, rec, &sw.hash)
+	fillSegmentHeader(hbuf[:], j, magicV1Draft, segnum, ts, rec, 0, 0)
 
 	_, err = f.Write(hbuf[:])
 	if err != nil {
@@ -112,13 +112,13 @@ func continueSegment(j *Journal, seg Segment) (*segmentWriter, error) {
 
 	ok = true
 	return &segmentWriter{
-		j:       j,
-		f:       f,
-		seg:     sr.seg,
-		ts:      sr.ts,
-		nextRec: sr.rec + 1,
-		size:    sr.committedSize,
-		hash:    sr.hash,
+		j:        j,
+		f:        f,
+		seg:      sr.seg,
+		ts:       sr.ts,
+		nextRec:  sr.rec + 1,
+		size:     sr.committedSize,
+		dataHash: sr.dataHash,
 	}, nil
 }
 
@@ -136,13 +136,13 @@ func (sw *segmentWriter) writeRecord(ts uint64, data []byte) error {
 	// 	sw.j.logger.Debug("hash before record", "journal", sw.j.debugName, "record", string(data), "hash", fmt.Sprintf("%08x", sw.hash.Sum64()))
 	// }
 
-	sw.hash.Write(h)
+	sw.dataHash.Write(h)
 	_, err := sw.f.Write(h)
 	if err != nil {
 		return err
 	}
 
-	sw.hash.Write(data)
+	sw.dataHash.Write(data)
 	_, err = sw.f.Write(data)
 	if err != nil {
 		return err
@@ -169,9 +169,9 @@ func (sw *segmentWriter) commit() error {
 	sw.size += 8
 
 	var buf [8]byte
-	binary.LittleEndian.PutUint64(buf[:], sw.hash.Sum64()|uint64(recordFlagCommit))
+	binary.LittleEndian.PutUint64(buf[:], sw.dataHash.Sum64()|uint64(recordFlagCommit))
 
-	sw.hash.Write(buf[:])
+	sw.dataHash.Write(buf[:])
 	_, err := sw.f.Write(buf[:])
 	if err != nil {
 		return err
@@ -184,9 +184,12 @@ func (sw *segmentWriter) close(mode closeMode) error {
 	if sw.f == nil {
 		return nil
 	}
+
 	defer func() {
-		sw.f.Close()
-		sw.f = nil
+		if sw.f != nil {
+			sw.f.Close()
+			sw.f = nil
+		}
 	}()
 
 	if mode.shouldCommit() {
@@ -202,6 +205,25 @@ func (sw *segmentWriter) close(mode closeMode) error {
 		}
 
 		if mode.shouldFinalize() && sw.seg.status == Draft {
+			var hbuf [segmentHeaderSize]byte
+			fillSegmentHeader(hbuf[:], sw.j, magicV1Finalized, sw.seg.segnum, sw.seg.ts, sw.seg.recnum, sw.ts, sw.nextRec-1)
+
+			_, err = sw.f.Seek(0, io.SeekStart)
+			if err != nil {
+				return err
+			}
+
+			_, err = sw.f.Write(hbuf[:])
+			if err != nil {
+				return err
+			}
+
+			err = sw.f.Close()
+			sw.f = nil
+			if err != nil {
+				return err
+			}
+
 			oldFileName := sw.seg.fileName(sw.j)
 			sw.seg.status = Finalized
 			newFileName := sw.seg.fileName(sw.j)
@@ -220,7 +242,7 @@ func (sw *segmentWriter) close(mode closeMode) error {
 }
 
 func (sw *segmentWriter) checksum() uint64 {
-	return sw.hash.Sum64()
+	return sw.dataHash.Sum64()
 }
 
 func (sw *segmentWriter) shouldRotate(size int) bool {

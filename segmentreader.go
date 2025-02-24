@@ -14,7 +14,7 @@ type segmentReader struct {
 	j             *Journal
 	f             *os.File
 	r             *bufio.Reader
-	hash          xxhash.Digest
+	dataHash      xxhash.Digest
 	seg           Segment
 	rec           uint64
 	ts            uint64
@@ -76,7 +76,7 @@ func newSegmentReader(j *Journal, f *os.File, seg Segment) (*segmentReader, erro
 		committedTS:   0,
 		committedSize: 0,
 	}
-	sr.hash.Reset()
+	sr.dataHash.Reset()
 
 	var h segmentHeader
 	err := sr.readHeader(&h, seg.status)
@@ -118,8 +118,8 @@ func (sr *segmentReader) next() error {
 				return err
 			}
 			actual := binary.LittleEndian.Uint64(b[:])
-			expected := sr.hash.Sum64() | uint64(recordFlagCommit)
-			sr.hash.Write(b[:])
+			expected := sr.dataHash.Sum64() | uint64(recordFlagCommit)
+			sr.dataHash.Write(b[:])
 			if actual != expected {
 				if sr.j.verbose {
 					sr.j.logger.Debug("corrupted record: commit checksum mismatch", "journal", sr.j.debugName, "actual", fmt.Sprintf("%08x", actual), "expected", fmt.Sprintf("%08x", expected))
@@ -165,7 +165,7 @@ func (sr *segmentReader) next() error {
 			// }
 
 			n := n1 + n2
-			sr.hash.Write(b[:n])
+			sr.dataHash.Write(b[:n])
 			sr.r.Discard(n)
 
 			if cap(sr.data) < dataSize {
@@ -183,7 +183,7 @@ func (sr *segmentReader) next() error {
 			} else if err != nil {
 				return err
 			}
-			sr.hash.Write(sr.data)
+			sr.dataHash.Write(sr.data)
 
 			sr.recordsInSeg++
 			sr.rec++
@@ -191,7 +191,7 @@ func (sr *segmentReader) next() error {
 			sr.size += int64(n + dataSize)
 
 			if sr.j.verbose {
-				sr.j.logger.Debug("record decoded", "journal", sr.j.debugName, "data", string(sr.data), "hash", fmt.Sprintf("%08x", sr.hash.Sum64()))
+				sr.j.logger.Debug("record decoded", "journal", sr.j.debugName, "data", string(sr.data), "hash", fmt.Sprintf("%08x", sr.dataHash.Sum64()))
 			}
 
 			return nil
@@ -215,11 +215,12 @@ func (sr *segmentReader) readHeader(h *segmentHeader, status Status) error {
 		panic("internal size mismatch")
 	}
 
-	sr.hash.Write(buf[:segmentHeaderSize-8])
-	checksum := sr.hash.Sum64()
-	sr.hash.Write(buf[segmentHeaderSize-8 : segmentHeaderSize])
+	var hash xxhash.Digest
+	hash.Reset()
+	hash.Write(buf[:segmentHeaderSize-8])
+	checksum := hash.Sum64()
 
-	if h.Magic != magicV1Draft && h.Magic != magicV1Sealed {
+	if h.Magic != magicV1Draft && h.Magic != magicV1Sealed && h.Magic != magicV1Finalized {
 		if sr.j.verbose {
 			sr.j.logger.Debug("incompatible header: version", "journal", sr.j.debugName)
 		}
@@ -232,10 +233,17 @@ func (sr *segmentReader) readHeader(h *segmentHeader, status Status) error {
 			}
 			return errCorruptedFile
 		}
-	} else {
+	} else if status.IsDraft() {
 		if h.Magic != magicV1Draft {
 			if sr.j.verbose {
-				sr.j.logger.Debug("wrong header magic: sealed format in an unsealed file", "journal", sr.j.debugName)
+				sr.j.logger.Debug("wrong header magic: non-draft format in an draft file", "journal", sr.j.debugName)
+			}
+			return errCorruptedFile
+		}
+	} else if status == Finalized {
+		if h.Magic != magicV1Finalized {
+			if sr.j.verbose {
+				sr.j.logger.Debug("wrong header magic: non-finalized format in a finalized file", "journal", sr.j.debugName)
 			}
 			return errCorruptedFile
 		}
@@ -252,13 +260,13 @@ func (sr *segmentReader) readHeader(h *segmentHeader, status Status) error {
 		}
 		return errCorruptedFile
 	}
-	if sr.ts != h.Timestamp {
+	if sr.ts != h.FirstTimestamp {
 		if sr.j.verbose {
 			sr.j.logger.Debug("corrupted header: timestamp", "journal", sr.j.debugName)
 		}
 		return errCorruptedFile
 	}
-	if sr.rec+1 != h.RecordNumber {
+	if sr.rec+1 != h.FirstRecordNumber {
 		if sr.j.verbose {
 			sr.j.logger.Debug("corrupted header: record ordinal", "journal", sr.j.debugName)
 		}

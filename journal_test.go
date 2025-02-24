@@ -12,8 +12,9 @@ import (
 )
 
 const draft = "'JOURNLAD"
+const finalized = "'JOURNLAF"
 const sealed = "'JOURNLAS"
-const filler = "0*32/journal_inv 0*32/seg_inv 0...*3/reserved"
+const filler = "0*32/journal_inv 0*32/seg_inv 0.../reserved"
 
 func TestJournalFlow_simple(t *testing.T) {
 	j := journaltest.Writable(t, journal.Options{
@@ -85,6 +86,10 @@ func TestJournalFlow_large(t *testing.T) {
 }
 
 func TestJournalInternals(t *testing.T) {
+	// very useful one-liner for this test:
+	//
+	//   pbpaste | perl -pe 's/\|.*$//; s/^\s*[\da-fA-F]{6,}\s+//; s/\R//g; s/\s+//g' | pbcopy
+
 	j := journaltest.Writable(t, journal.Options{
 		MaxFileSize: 165,
 	})
@@ -101,15 +106,24 @@ func TestJournalInternals(t *testing.T) {
 		"jW0000000001-20240101T000000000-000000000001.wal",
 	})
 
-	start1 := concat(
+	draftHeader1 := concat(
+		draft,
 		"1../seg 0.. 00_f4_51_c2_8c_01.../ts 1.../rec",
-		filler, "e5e8c2d95fbf79a1",
+		"0.../ts 0.../rec",
+		filler, "e5e8c2d95fbf79a1")
+	finalHeader1 := concat(
+		finalized,
+		"1../seg 0.. 00_f4_51_c2_8c_01.../ts 1.../rec",
+		"505d61c28c01.../ts 4.../rec",
+		filler, "f4fd2d7929b255e4")
+
+	start1 := concat(
 		"#10 #0 'hello",
 		"#2 #0 'w",
 		"#8 #1000000 'orld",
-		"b13af5c6fe2b3b 6f",
+		"9fb570ecfee2ce98",
 	)
-	j.Eq(files[0], draft, start1)
+	j.Eq(files[0], draftHeader1, start1)
 
 	j.StartWriting()
 	j.Advance(10 * time.Second)
@@ -126,55 +140,56 @@ func TestJournalInternals(t *testing.T) {
 	})
 
 	j.Eq(files[0],
-		draft, start1,
+		finalHeader1, start1,
 		"#6 #10000 'foo",
-		"550a7e6d7e9ffbfa",
+		"e1c52d99a7ff1647",
 	)
 
-	prestart2 := concat("2../seg 0.. 505d61c28c01.../ts 5.../rec", filler,
-		"3b5e5a292ac3d51e")
+	draftHeader2 := concat(
+		draft,
+		"2../seg 0.. 505d61c28c01.../ts 5.../rec",
+		"0.../ts 0.../rec",
+		filler, "3b5e5a292ac3d51e")
 	start2 := concat(
-		prestart2,
 		"#18 #0 'boooooooo",
-		"4793427cfcf49ae0",
+		"edad4b702d82aedc",
 	)
 	j.Eq(files[1],
-		draft, start2,
+		draftHeader2, start2,
 		"#8 #0 'wooo",
-		"bddd2aaa4d525004",
+		"c70e16920ec819a6",
 	)
 
 	// recovery: missing checksum + continue writing
-	j.Put(files[1], draft, start2,
+	j.Put(files[1], draftHeader2, start2,
 		"#8 #0 'wooo",
 		"5df47af8e96d296f")
 	j.StartWriting()
 	ensure(j.WriteRecord(0, []byte("x")))
 	ensure(j.FinishWriting())
-	j.Eq(files[1], draft, start2,
+	j.Eq(files[1], draftHeader2, start2,
 		"#2 #0 'x",
-		"233ced0d2205baa9")
+		"db7c368a2184d721")
 
 	// recovery: no commit
-	j.Put(files[1], draft, start2,
+	j.Put(files[1], draftHeader2, start2,
 		"#8 #0 'wooo")
 	j.StartWriting()
 	ensure(j.FinishWriting())
-	j.Eq(files[1], draft, start2)
+	j.Eq(files[1], draftHeader2, start2)
 
 	// recovery: nonsensical data
 	j.Put(files[1],
-		draft, start2,
+		draftHeader2, start2,
 		"FE FF*100",
 	)
 	j.StartWriting()
 	ensure(j.FinishWriting())
-	j.Eq(files[1], draft, start2)
+	j.Eq(files[1], draftHeader2, start2)
 
 	// recovery: broken first record (file deleted)
 	j.Put(files[1],
-		draft,
-		prestart2,
+		draftHeader2,
 		"#18 #0 'boooooooo",
 	)
 	j.StartWriting()
@@ -194,8 +209,8 @@ func TestJournalInternals(t *testing.T) {
 		"jF0000000001-20240101T000000000-000000000001.wal",
 		"jW0000000002-20240101T001650000-000000000005.wal",
 	})
-	j.Eq(files[1], draft, start2,
+	j.Eq(files[1], draftHeader2, start2,
 		"#2 #0 'x",
-		"233ced0d2205baa9",
+		"db7c368a2184d721",
 	)
 }
