@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/andreyvit/journal"
-	"github.com/andreyvit/journal/internal/journaltest"
 )
 
 const draft = "'JOURNLAD"
@@ -16,11 +15,12 @@ const sealed = "'JOURNLAS"
 const filler = "0*32/journal_inv 0*32/seg_inv 0.../reserved"
 
 func TestJournalFlow_simple(t *testing.T) {
-	j := journaltest.Writable(t, journal.Options{
+	clock := newClock()
+	j := setupWritable(t, clock, journal.Options{
 		MaxFileSize: 165,
 	})
 	ensure(j.WriteRecord(0, []byte("hello")))
-	j.Advance(1 * time.Second)
+	clock.Advance(1 * time.Second)
 	ensure(j.WriteRecord(0, []byte("w")))
 	ensure(j.FinishWriting())
 
@@ -45,21 +45,22 @@ func TestJournalFlow_simple(t *testing.T) {
 }
 
 func TestJournalFlow_autorotate(t *testing.T) {
-	j := journaltest.Writable(t, journal.Options{
+	clock := newClock()
+	j := setupWritable(t, clock, journal.Options{
 		MaxFileSize: 165,
 		Autorotate: journal.AutorotateOptions{
 			Interval: 1 * time.Hour,
 		},
 	})
 	ensure(j.WriteRecord(0, []byte("hello")))
-	j.Advance(1 * time.Second)
+	clock.Advance(1 * time.Second)
 
 	deepEq(t, j.FileNames(), []string{
 		"jW0000000001-20240101T000000000-000000000001.wal",
 	})
 	eq(t, must(j.Autorotate(j.Now())), false)
 
-	j.Advance(1 * time.Hour)
+	clock.Advance(1 * time.Hour)
 	eq(t, must(j.Autorotate(j.Now())), true)
 
 	deepEq(t, j.FileNames(), []string{
@@ -68,13 +69,14 @@ func TestJournalFlow_autorotate(t *testing.T) {
 }
 
 func TestJournalFlow_large(t *testing.T) {
-	j := journaltest.Writable(t, journal.Options{
+	clock := newClock()
+	j := setupWritable(t, clock, journal.Options{
 		MaxFileSize: 165,
 	})
 	ensure(j.WriteRecord(0, []byte("hello")))
-	j.Advance(1 * time.Millisecond)
+	clock.Advance(1 * time.Millisecond)
 	ensure(j.WriteRecord(0, []byte("w")))
-	j.Advance(1000 * time.Second)
+	clock.Advance(1000 * time.Second)
 	ensure(j.WriteRecord(0, []byte("foo")))
 	ensure(j.WriteRecord(0, []byte("bar boz")))
 	huge := strings.Repeat("huge", 100)
@@ -82,7 +84,7 @@ func TestJournalFlow_large(t *testing.T) {
 	ensure(j.FinishWriting())
 
 	for i := range 10 {
-		j.Advance(25 * time.Millisecond)
+		clock.Advance(25 * time.Millisecond)
 		ensure(j.WriteRecord(0, []byte(fmt.Sprintf("record %d", i))))
 		ensure(j.FinishWriting())
 	}
@@ -111,12 +113,13 @@ func TestJournalInternals(t *testing.T) {
 	//
 	//   pbpaste | perl -pe 's/\|.*$//; s/^\s*[\da-fA-F]{6,}\s+//; s/\R//g; s/\s+//g' | pbcopy
 
-	j := journaltest.Writable(t, journal.Options{
+	clock := newClock()
+	j := setupWritable(t, clock, journal.Options{
 		MaxFileSize: 165,
 	})
 	ensure(j.WriteRecord(0, []byte("hello")))
 	ensure(j.WriteRecord(0, []byte("w")))
-	j.Advance(1000 * time.Second)
+	clock.Advance(1000 * time.Second)
 	ensure(j.WriteRecord(0, []byte("orld")))
 	j.FinishWriting()
 
@@ -145,7 +148,7 @@ func TestJournalInternals(t *testing.T) {
 	j.Eq(files[0], draftHeader1, start1)
 
 	j.StartWriting()
-	j.Advance(10 * time.Second)
+	clock.Advance(10 * time.Second)
 	ensure(j.WriteRecord(0, []byte("foo")))
 	ensure(j.WriteRecord(0, []byte("boooooooo")))
 	ensure(j.Commit())

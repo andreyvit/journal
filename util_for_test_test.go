@@ -1,4 +1,4 @@
-package journaltest
+package journal_test
 
 import "testing"
 
@@ -65,8 +65,8 @@ func TestExpandAndHexDump(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		expanded := Expand(tt.input)
-		dump := HexDump(expanded, -1)
+		expanded := expand(tt.input)
+		dump := hexDump(expanded, -1)
 		if dump != tt.expected {
 			t.Errorf("HexDump(%q) = %q, want %q", tt.input, dump, tt.expected)
 		}
