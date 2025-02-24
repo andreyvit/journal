@@ -2,7 +2,6 @@ package journal_test
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"testing"
 	"time"
@@ -43,6 +42,29 @@ func TestJournalFlow_simple(t *testing.T) {
 	eqstr(t, recs[1].Data, []byte("w"))
 	eq(t, recs[1].ID, 2)
 	eq(t, recs[1].Timestamp, journal.ToTimestamp(time.Date(2024, 1, 1, 0, 0, 1, 0, time.UTC)))
+}
+
+func TestJournalFlow_autorotate(t *testing.T) {
+	j := journaltest.Writable(t, journal.Options{
+		MaxFileSize: 165,
+		Autorotate: journal.AutorotateOptions{
+			Interval: 1 * time.Hour,
+		},
+	})
+	ensure(j.WriteRecord(0, []byte("hello")))
+	j.Advance(1 * time.Second)
+
+	deepEq(t, j.FileNames(), []string{
+		"jW0000000001-20240101T000000000-000000000001.wal",
+	})
+	eq(t, must(j.Autorotate(j.Now())), false)
+
+	j.Advance(1 * time.Hour)
+	eq(t, must(j.Autorotate(j.Now())), true)
+
+	deepEq(t, j.FileNames(), []string{
+		"jF0000000001-20240101T000000000-000000000001.wal",
+	})
 }
 
 func TestJournalFlow_large(t *testing.T) {
@@ -97,8 +119,6 @@ func TestJournalInternals(t *testing.T) {
 	j.Advance(1000 * time.Second)
 	ensure(j.WriteRecord(0, []byte("orld")))
 	j.FinishWriting()
-
-	log.Printf("%x", j.Now().UnixMilli())
 
 	files := j.FileNames()
 	deepEq(t, files, []string{

@@ -84,12 +84,17 @@ type Options struct {
 	Now              func() time.Time
 	JournalInvariant [32]byte
 	SegmentInvariant [32]byte
+	Autorotate       AutorotateOptions
 
 	Context context.Context
 	Logger  *slog.Logger
 	Verbose bool
 
 	OnChange func()
+}
+
+type AutorotateOptions struct {
+	Interval time.Duration
 }
 
 const DefaultMaxFileSize = 10 * 1024 * 1024
@@ -108,6 +113,7 @@ type Journal struct {
 	journalInvariant [32]byte
 	segmentInvariant [32]byte
 	onChange         func()
+	autorotate       AutorotateOptions
 
 	state  journalState
 	writer journalWriter
@@ -146,6 +152,7 @@ func New(dir string, o Options) *Journal {
 		segmentInvariant: o.SegmentInvariant,
 		logger:           o.Logger,
 		onChange:         o.OnChange,
+		autorotate:       o.Autorotate,
 	}
 	j.writer.j = j
 	return j
@@ -187,6 +194,17 @@ func (j *Journal) Rotate() error {
 
 	j.writer.StartWriting()
 	return j.writer.FinishWriting(closeAndFinalize)
+}
+
+func (j *Journal) Autorotate(now uint64) (bool, error) {
+	needs, err := j.needsRotation(now)
+	if err != nil {
+		return false, err
+	}
+	if !needs {
+		return false, nil
+	}
+	return true, j.Rotate()
 }
 
 func (j *Journal) WriteRecord(timestamp uint64, data []byte) error {

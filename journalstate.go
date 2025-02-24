@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 )
 
 type journalState struct {
@@ -27,6 +28,19 @@ func (j *Journal) SegmentCount() (int, error) {
 		return -1, err
 	}
 	return len(j.state.unsealed), nil
+}
+
+func (j *Journal) needsRotation(now uint64) (bool, error) {
+	if j.autorotate.Interval == 0 {
+		return false, nil
+	}
+
+	j.state.lock.Lock()
+	defer j.state.lock.Unlock()
+	if err := j.state.ensureInitialized(j); err != nil {
+		return false, err
+	}
+	return j.state.needsRotation(now, &j.autorotate), nil
 }
 
 func (j *Journal) lastSegment() (Segment, error) {
@@ -121,6 +135,15 @@ func (js *journalState) last() Segment {
 	} else {
 		return js.lastSealed
 	}
+}
+
+func (js *journalState) needsRotation(now uint64, rotopt *AutorotateOptions) bool {
+	last := js.last()
+	if last.IsZero() || !last.status.IsDraft() {
+		return false
+	}
+	elapsed := time.Duration(now-last.ts) * time.Millisecond
+	return elapsed >= rotopt.Interval
 }
 
 func (js *journalState) addSegment(j *Journal, seg Segment) {

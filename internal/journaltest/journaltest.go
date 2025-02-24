@@ -89,8 +89,8 @@ func (j *TestJournal) Data(fileName string) []byte {
 	return b
 }
 
-func (j *TestJournal) Now() time.Time {
-	return j.now
+func (j *TestJournal) Now() uint64 {
+	return journal.ToTimestamp(j.now)
 }
 
 func (j *TestJournal) Advance(d time.Duration) {
