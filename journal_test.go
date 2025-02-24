@@ -29,7 +29,6 @@ func TestJournalFlow_simple(t *testing.T) {
 		"jW0000000001-20240101T000000000-000000000001.wal",
 	})
 
-	j.StartWriting()
 	ensure(j.Rotate())
 
 	deepEq(t, j.FileNames(), []string{

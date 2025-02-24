@@ -2,8 +2,8 @@ package journal
 
 import (
 	"cmp"
+	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"slices"
 	"strings"
@@ -36,19 +36,61 @@ func (seg Segment) fileName(j *Journal) string {
 }
 
 func (j *Journal) FindSegments(filter Filter) ([]Segment, error) {
-	dirf, err := os.Open(j.dir)
+	return j.findKnownSegments(filter)
+}
+
+func (j *Journal) findUnknownSegments(filter Filter) ([]Segment, error) {
+	var segs []Segment
+	var bestPrev Segment
+	err := j.enumSegments(func(seg Segment) error {
+		if seg.recnum < filter.MinRecordID || seg.ts < filter.MinTimestamp {
+			if bestPrev.IsZero() || compareSegments(seg, bestPrev) > 0 {
+				bestPrev = seg
+			}
+			return nil
+		}
+		if filter.MaxRecordID != 0 && seg.recnum > filter.MaxRecordID {
+			return nil
+		}
+		if filter.MaxTimestamp != 0 && seg.ts > filter.MaxTimestamp {
+			return nil
+		}
+		segs = append(segs, seg)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
+
+	if !bestPrev.IsZero() {
+		segs = append(segs, bestPrev)
+	}
+
+	slices.SortFunc(segs, compareSegments)
+	return segs, nil
+}
+
+func (j *Journal) enumSegments(f func(Segment) error) error {
+	dirf, err := os.Open(j.dir)
+	if err != nil {
+		return err
+	}
 	defer dirf.Close()
 
-	var segs []Segment
+	ds, err := dirf.Stat()
+	if err != nil {
+		return err
+	}
+	if !ds.IsDir() {
+		return fmt.Errorf("%v: not a directory", j.debugName)
+	}
+
 	for {
 		ents, err := dirf.ReadDir(16)
 		if err == io.EOF {
 			break
 		} else if err != nil {
-			return nil, err
+			return err
 		}
 
 		for _, ent := range ents {
@@ -62,87 +104,13 @@ func (j *Journal) FindSegments(filter Filter) ([]Segment, error) {
 
 			seg, err := parseSegmentName(j.fileNamePrefix, j.fileNameSuffix, name)
 			if err != nil {
-				return nil, err
+				return err
 			}
-
-			if filter.MaxRecordID != 0 && seg.recnum > filter.MaxRecordID {
-				continue
-			}
-			if filter.MaxTimestamp != 0 && seg.ts > filter.MaxTimestamp {
-				continue
-			}
-			segs = append(segs, seg)
-		}
-	}
-
-	slices.SortFunc(segs, compareSegments)
-
-	if filter.MinRecordID != 0 {
-		cutoff := -1
-		for i, seg := range segs {
-			if seg.recnum == filter.MinRecordID {
-				cutoff = i
-				break
-			} else if seg.recnum > filter.MinRecordID {
-				cutoff = i - 1
-				break
-			}
-		}
-		if cutoff > 0 {
-			segs = segs[cutoff:]
-		}
-	}
-
-	if filter.MinTimestamp != 0 {
-		cutoff := -1
-		for i, seg := range segs {
-			if seg.ts == filter.MinTimestamp {
-				cutoff = i
-				break
-			} else if seg.ts > filter.MinTimestamp {
-				cutoff = i - 1
-				break
-			}
-		}
-		if cutoff > 0 {
-			segs = segs[cutoff:]
-		}
-	}
-
-	return segs, nil
-}
-
-func (j *Journal) findLastSegment(dirf fs.ReadDirFile) (Segment, error) {
-	var last Segment
-	for {
-		if err := j.context.Err(); err != nil {
-			break
-		}
-
-		ents, err := dirf.ReadDir(16)
-		if err == io.EOF {
-			break
-		}
-		for _, ent := range ents {
-			if !ent.Type().IsRegular() {
-				continue
-			}
-			name := ent.Name()
-			if !strings.HasPrefix(name, j.fileNamePrefix) {
-				continue
-			}
-			if !strings.HasSuffix(name, j.fileNameSuffix) {
-				continue
-			}
-
-			seg, err := parseSegmentName(j.fileNamePrefix, j.fileNameSuffix, name)
+			err = f(seg)
 			if err != nil {
-				return Segment{}, err
-			}
-			if last.IsZero() || compareSegments(seg, last) > 0 {
-				last = seg
+				return err
 			}
 		}
 	}
-	return last, nil
+	return nil
 }

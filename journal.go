@@ -109,6 +109,7 @@ type Journal struct {
 	segmentInvariant [32]byte
 	onChange         func()
 
+	state  journalState
 	writer journalWriter
 }
 
@@ -171,6 +172,20 @@ func (j *Journal) FinishWriting() error {
 }
 
 func (j *Journal) Rotate() error {
+	err := j.writer.FinishWriting(closeAndFinalize)
+	if err != nil {
+		return err
+	}
+
+	last, err := j.lastSegment()
+	if err != nil {
+		return err
+	}
+	if last.IsZero() || !last.status.IsDraft() {
+		return nil // nothing to do
+	}
+
+	j.writer.StartWriting()
 	return j.writer.FinishWriting(closeAndFinalize)
 }
 

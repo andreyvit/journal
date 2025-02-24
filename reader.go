@@ -10,13 +10,6 @@ import (
 
 var ErrInternal = errors.New("journal: internal error")
 
-type Filter struct {
-	MinRecordID  uint64
-	MinTimestamp uint64
-	MaxRecordID  uint64
-	MaxTimestamp uint64
-}
-
 type Record struct {
 	ID        uint64
 	Timestamp uint64

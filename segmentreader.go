@@ -63,6 +63,19 @@ func openSegment(j *Journal, seg Segment) (*os.File, *segmentReader, error) {
 	return f, r, nil
 }
 
+func loadSegmentHeader(j *Journal, h *segmentHeader, seg Segment) error {
+	f, err := j.openFile(seg, false)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errFileGone
+		}
+		return err
+	}
+	defer f.Close()
+
+	return readSegmentHeader(j, f, h, seg)
+}
+
 func newSegmentReader(j *Journal, f *os.File, seg Segment) (*segmentReader, error) {
 	sr := &segmentReader{
 		j:             j,
@@ -79,7 +92,7 @@ func newSegmentReader(j *Journal, f *os.File, seg Segment) (*segmentReader, erro
 	sr.dataHash.Reset()
 
 	var h segmentHeader
-	err := sr.readHeader(&h, seg.status)
+	err := readSegmentHeader(j, f, &h, seg)
 	if err != nil {
 		return sr, err
 	}
@@ -199,9 +212,9 @@ func (sr *segmentReader) next() error {
 	}
 }
 
-func (sr *segmentReader) readHeader(h *segmentHeader, status Status) error {
+func readSegmentHeader(j *Journal, r io.Reader, h *segmentHeader, seg Segment) error {
 	var buf [segmentHeaderSize]byte
-	_, err := io.ReadFull(sr.r, buf[:])
+	_, err := io.ReadFull(r, buf[:])
 	if err == io.ErrUnexpectedEOF || err == io.EOF {
 		return errCorruptedFile
 	} else if err != nil {
@@ -221,60 +234,62 @@ func (sr *segmentReader) readHeader(h *segmentHeader, status Status) error {
 	checksum := hash.Sum64()
 
 	if h.Magic != magicV1Draft && h.Magic != magicV1Sealed && h.Magic != magicV1Finalized {
-		if sr.j.verbose {
-			sr.j.logger.Debug("incompatible header: version", "journal", sr.j.debugName)
+		if j.verbose {
+			j.logger.Debug("incompatible header: version", "journal", j.debugName)
 		}
 		return ErrUnsupportedVersion
 	}
-	if status.IsSealed() {
+	if seg.status.IsSealed() {
 		if h.Magic != magicV1Sealed {
-			if sr.j.verbose {
-				sr.j.logger.Debug("wrong header magic: unsealed format in a sealed file", "journal", sr.j.debugName)
+			if j.verbose {
+				j.logger.Debug("wrong header magic: unsealed format in a sealed file", "journal", j.debugName)
 			}
 			return errCorruptedFile
 		}
-	} else if status.IsDraft() {
-		if h.Magic != magicV1Draft {
-			if sr.j.verbose {
-				sr.j.logger.Debug("wrong header magic: non-draft format in an draft file", "journal", sr.j.debugName)
+	} else if seg.status.IsDraft() {
+		// allow finalized magic because we could have crashed while updating
+		// the magic
+		if h.Magic != magicV1Draft && h.Magic != magicV1Finalized {
+			if j.verbose {
+				j.logger.Debug("wrong header magic: sealed format in a draft file", "journal", j.debugName)
 			}
 			return errCorruptedFile
 		}
-	} else if status == Finalized {
+	} else if seg.status == Finalized {
 		if h.Magic != magicV1Finalized {
-			if sr.j.verbose {
-				sr.j.logger.Debug("wrong header magic: non-finalized format in a finalized file", "journal", sr.j.debugName)
+			if j.verbose {
+				j.logger.Debug("wrong header magic: non-finalized format in a finalized file", "journal", j.debugName)
 			}
 			return errCorruptedFile
 		}
 	}
 	if checksum != h.HeaderChecksum {
-		if sr.j.verbose {
-			sr.j.logger.Debug("corrupted header: checksum", "journal", sr.j.debugName, "actual", fmt.Sprintf("%08x", h.HeaderChecksum), "expected", fmt.Sprintf("%08x", checksum))
+		if j.verbose {
+			j.logger.Debug("corrupted header: checksum", "journal", j.debugName, "actual", fmt.Sprintf("%08x", h.HeaderChecksum), "expected", fmt.Sprintf("%08x", checksum))
 		}
 		return errCorruptedFile
 	}
-	if sr.seg.segnum != h.SegmentNumber {
-		if sr.j.verbose {
-			sr.j.logger.Debug("corrupted header: segment ordinal", "journal", sr.j.debugName)
+	if seg.segnum != h.SegmentNumber {
+		if j.verbose {
+			j.logger.Debug("corrupted header: segment ordinal", "journal", j.debugName)
 		}
 		return errCorruptedFile
 	}
-	if sr.ts != h.FirstTimestamp {
-		if sr.j.verbose {
-			sr.j.logger.Debug("corrupted header: timestamp", "journal", sr.j.debugName)
+	if seg.ts != h.FirstTimestamp {
+		if j.verbose {
+			j.logger.Debug("corrupted header: timestamp", "journal", j.debugName)
 		}
 		return errCorruptedFile
 	}
-	if sr.rec+1 != h.FirstRecordNumber {
-		if sr.j.verbose {
-			sr.j.logger.Debug("corrupted header: record ordinal", "journal", sr.j.debugName)
+	if seg.recnum != h.FirstRecordNumber {
+		if j.verbose {
+			j.logger.Debug("corrupted header: record ordinal", "journal", j.debugName)
 		}
 		return errCorruptedFile
 	}
-	if h.JournalInvariant != sr.j.journalInvariant {
-		if sr.j.verbose {
-			sr.j.logger.Debug("incompatible header: journal invariant", "journal", sr.j.debugName)
+	if h.JournalInvariant != j.journalInvariant {
+		if j.verbose {
+			j.logger.Debug("incompatible header: journal invariant", "journal", j.debugName)
 		}
 		return ErrIncompatible
 	}

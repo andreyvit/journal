@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"sync"
 )
 
@@ -26,10 +25,12 @@ func (m closeMode) shouldFinalize() bool {
 type journalWriter struct {
 	j *Journal
 
-	writeLock sync.Mutex
-	writable  bool
-	writeErr  error
-	segWriter *segmentWriter
+	writeLock  sync.Mutex
+	writable   bool
+	writeErr   error
+	segWriter  *segmentWriter
+	nextSegNum uint32
+	nextRecNum uint64
 }
 
 func (jw *journalWriter) StartWriting() {
@@ -76,50 +77,51 @@ func (jw *journalWriter) fsyncFailed(err error) {
 func (jw *journalWriter) prepareToWrite_locked() error {
 	var failed Segment
 	for {
-		last, err := jw.prepareToWrite_locked_once(failed)
+		err := jw.prepareToWrite_locked_once(&failed)
 		if err == errFileGone {
-			failed = last
+			jw.j.resetState()
 			continue
 		}
 		return err
 	}
 }
 
-func (jw *journalWriter) prepareToWrite_locked_once(failed Segment) (Segment, error) {
-	dirf, err := os.Open(jw.j.dir)
+func (jw *journalWriter) prepareToWrite_locked_once(failed *Segment) error {
+	last, err := jw.j.lastSegment()
 	if err != nil {
-		return Segment{}, err
-	}
-	defer dirf.Close()
-
-	ds, err := dirf.Stat()
-	if err != nil {
-		return Segment{}, err
-	}
-	if !ds.IsDir() {
-		return Segment{}, fmt.Errorf("%v: not a directory", jw.j.debugName)
-	}
-
-	last, err := jw.j.findLastSegment(dirf)
-	if err != nil {
-		return Segment{}, err
+		return err
 	}
 	if jw.j.verbose {
 		jw.j.logger.Debug("journal last file", "journal", jw.j.debugName, "file", last)
 	}
 	if last.IsZero() {
-		return Segment{}, nil
+		jw.nextSegNum = 1
+		jw.nextRecNum = 1
+		return nil
 	}
-	if last == failed {
-		return Segment{}, fmt.Errorf("journal: failed twice to continue with segment file %v", last)
+	if last == *failed {
+		return fmt.Errorf("journal: failed twice to continue with segment file %v", last)
 	}
 
-	sw, err := continueSegment(jw.j, last)
-	if err != nil {
-		return last, err
+	if last.status.IsDraft() {
+		sw, err := continueSegment(jw.j, last)
+		if err != nil {
+			*failed = last
+			return err
+		}
+		jw.segWriter = sw
+	} else {
+		var h segmentHeader
+		err := loadSegmentHeader(jw.j, &h, last)
+		if err != nil {
+			*failed = last
+			return err
+		}
+
+		jw.nextSegNum = last.segnum + 1
+		jw.nextRecNum = h.LastRecordNumber + 1
 	}
-	jw.segWriter = sw
-	return last, nil
+	return nil
 }
 
 func (j *journalWriter) ensurePreparedToWrite_locked() error {
@@ -163,17 +165,10 @@ func (jw *journalWriter) WriteRecord(timestamp uint64, data []byte) error {
 		return nil
 	}
 
-	var segnum uint32
-	var recnum uint64
-	if jw.segWriter == nil {
-		segnum = 1
-		recnum = 1
-	} else if jw.segWriter.shouldRotate(len(data)) {
+	if jw.segWriter != nil && jw.segWriter.shouldRotate(len(data)) {
 		if jw.j.verbose {
 			jw.j.logger.Debug("rotating segment", "journal", jw.j.debugName, "segment", jw.segWriter.seg, "segment_size", jw.segWriter.size, "data_size", len(data))
 		}
-		segnum = jw.segWriter.seg.segnum + 1
-		recnum = jw.segWriter.nextRec
 		err := jw.close_locked(closeAndFinalize)
 		if err != nil {
 			return err
@@ -182,6 +177,8 @@ func (jw *journalWriter) WriteRecord(timestamp uint64, data []byte) error {
 	}
 
 	if jw.segWriter == nil {
+		segnum := jw.nextSegNum
+		recnum := jw.nextRecNum
 		if jw.j.verbose {
 			jw.j.logger.Debug("starting segment", "journal", jw.j.debugName, "segment", segnum, "record", recnum)
 		}
@@ -203,6 +200,11 @@ func (jw *journalWriter) Commit() error {
 }
 
 func (jw *journalWriter) close_locked(mode closeMode) error {
+	if mode.shouldFinalize() {
+		jw.nextSegNum = jw.segWriter.seg.segnum + 1
+		jw.nextRecNum = jw.segWriter.nextRec
+	}
+
 	err := jw.segWriter.close(mode)
 	if err != nil {
 		var fsf *fsyncFailedError

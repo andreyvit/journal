@@ -58,6 +58,7 @@ func startSegment(j *Journal, segnum uint32, ts uint64, rec uint64) (*segmentWri
 	}
 
 	ok = true
+	j.updateStateWithSegmentAdded(seg)
 	return sw, nil
 }
 
@@ -65,6 +66,7 @@ func continueSegment(j *Journal, seg Segment) (*segmentWriter, error) {
 	f, err := j.openFile(seg, true)
 	if err != nil {
 		if os.IsNotExist(err) {
+			j.updateStateWithSegmentGone(seg)
 			return nil, errFileGone
 		}
 		return nil, err
@@ -77,6 +79,7 @@ func continueSegment(j *Journal, seg Segment) (*segmentWriter, error) {
 		if sr == nil || sr.committedRec == 0 {
 			fileName := seg.fileName(j)
 			j.logger.LogAttrs(j.context, slog.LevelWarn, "journal: deleting completely corrupted file", slog.String("journal", j.debugName), slog.String("file", fileName))
+			j.updateStateWithSegmentGone(seg)
 			err := os.Remove(j.filePath(fileName))
 			if err != nil {
 				return nil, fmt.Errorf("journal: failed to delete corrupted file: %w", err)
@@ -224,17 +227,18 @@ func (sw *segmentWriter) close(mode closeMode) error {
 				return err
 			}
 
-			oldFileName := sw.seg.fileName(sw.j)
+			oldSeg := sw.seg
 			sw.seg.status = Finalized
-			newFileName := sw.seg.fileName(sw.j)
 
-			oldPath := sw.j.filePath(oldFileName)
-			newPath := sw.j.filePath(newFileName)
+			oldPath := sw.j.filePath(oldSeg.fileName(sw.j))
+			newPath := sw.j.filePath(sw.seg.fileName(sw.j))
 
 			err = os.Rename(oldPath, newPath)
 			if err != nil {
 				return err
 			}
+
+			sw.j.updateStateWithSegmentFinalized(oldSeg, sw.seg)
 		}
 	}
 
