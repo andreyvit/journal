@@ -151,7 +151,7 @@ func (js *journalState) summary() Summary {
 		LastSealedSegment:  Segment{},
 		SegmentCount:       len(js.unsealed),
 		LastCommitted:      js.lastCommitted,
-		LastRaw:            js.lastRaw,
+		LastUncommitted:    js.lastRaw,
 	}
 	if n := len(js.unsealed); n > 0 {
 		first := js.unsealed[0]

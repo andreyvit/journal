@@ -7,7 +7,7 @@ type Summary struct {
 	LastUnsealedSegment  Segment
 	SegmentCount         int
 	LastCommitted        Meta
-	LastRaw              Meta
+	LastUncommitted      Meta
 }
 
 func (s *Summary) FirstRecord() Meta {
@@ -18,8 +18,8 @@ func (s *Summary) FirstRecord() Meta {
 }
 
 func (s *Summary) UncommittedCount() int {
-	if s.LastRaw.ID > s.LastCommitted.ID {
-		return int(s.LastRaw.ID - s.LastCommitted.ID)
+	if s.LastUncommitted.ID > s.LastCommitted.ID {
+		return int(s.LastUncommitted.ID - s.LastCommitted.ID)
 	}
 	return 0
 }
