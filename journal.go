@@ -193,7 +193,8 @@ func (j *Journal) Summary() (Summary, error) {
 	}
 	err = j.writer.EnsurePreparedToWrite()
 	if err != nil {
-		return Summary{}, err
+		s, _, _ = j.immediateSummary()
+		return s, err
 	}
 	s, _, err = j.immediateSummary()
 	return s, err
