@@ -33,9 +33,8 @@ func (seg Segment) String() string {
 	return formatSegmentName("", "", seg)
 }
 
-func (seg Segment) IsZero() bool {
-	return seg.segnum == 0
-}
+func (seg Segment) IsZero() bool    { return seg.segnum == 0 }
+func (seg Segment) IsNonZero() bool { return !seg.IsZero() }
 
 func compareSegments(a, b Segment) int {
 	if a.segnum != b.segnum {
