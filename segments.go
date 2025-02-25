@@ -25,6 +25,10 @@ func (seg Segment) RecordNumber() uint64 { return seg.recnum }
 
 func (seg Segment) SegmentNumber() uint64 { return seg.segnum }
 
+func (seg Segment) FirstRecord() Meta {
+	return Meta{ID: seg.recnum, Timestamp: seg.ts}
+}
+
 func (seg Segment) String() string {
 	return formatSegmentName("", "", seg)
 }

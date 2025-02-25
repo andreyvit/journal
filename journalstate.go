@@ -150,8 +150,6 @@ func (js *journalState) summary() Summary {
 		FirstSealedSegment: Segment{},
 		LastSealedSegment:  Segment{},
 		SegmentCount:       len(js.unsealed),
-		FirstRecordNumber:  0,
-		FirstTimestamp:     0,
 		LastCommitted:      js.lastCommitted,
 		LastRaw:            js.lastRaw,
 	}
@@ -160,8 +158,6 @@ func (js *journalState) summary() Summary {
 		s.FirstUnsealedSegment = first
 		s.LastUnsealedSegment = js.unsealed[n-1]
 		s.SegmentCount = n
-		s.FirstRecordNumber = first.recnum
-		s.FirstTimestamp = first.ts
 	}
 	return s
 }

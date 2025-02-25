@@ -6,8 +6,13 @@ type Summary struct {
 	FirstUnsealedSegment Segment
 	LastUnsealedSegment  Segment
 	SegmentCount         int
-	FirstRecordNumber    uint64
-	FirstTimestamp       uint64
 	LastCommitted        Meta
 	LastRaw              Meta
+}
+
+func (s *Summary) FirstRecord() Meta {
+	if s.FirstUnsealedSegment.IsZero() {
+		return Meta{}
+	}
+	return s.FirstUnsealedSegment.FirstRecord()
 }
