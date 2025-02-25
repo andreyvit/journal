@@ -16,3 +16,10 @@ func (s *Summary) FirstRecord() Meta {
 	}
 	return s.FirstUnsealedSegment.FirstRecord()
 }
+
+func (s *Summary) UncommittedCount() int {
+	if s.LastRaw.ID > s.LastCommitted.ID {
+		return int(s.LastRaw.ID - s.LastCommitted.ID)
+	}
+	return 0
+}
