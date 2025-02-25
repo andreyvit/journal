@@ -68,6 +68,40 @@ func TestJournalFlow_autorotate(t *testing.T) {
 	})
 }
 
+func TestJournalFlow_summary(t *testing.T) {
+	clock := newClock()
+	j1 := setupWritable(t, clock, journal.Options{MaxFileSize: 165})
+	ensure(j1.WriteRecord(0, []byte("hello")))
+	clock.Advance(time.Second)
+	ensure(j1.WriteRecord(0, []byte("w")))
+	clock.Advance(time.Second)
+	ensure(j1.WriteRecord(0, []byte(strings.Repeat("huge", 100))))
+	clock.Advance(time.Second)
+	ensure(j1.WriteRecord(0, []byte(strings.Repeat("another", 100))))
+	clock.Advance(time.Second)
+	ensure(j1.WriteRecord(0, []byte("x")))
+	clock.Advance(time.Second)
+	ensure(j1.WriteRecord(0, []byte("y")))
+	ensure(j1.FinishWriting())
+	s := must(j1.Summary())
+	eq(t, s.FirstUnsealedSegment.SegmentNumber(), 1)
+	eq(t, s.FirstUnsealedSegment.RecordNumber(), 1)
+	eq(t, s.LastUnsealedSegment.SegmentNumber(), 4)
+	eq(t, s.LastUnsealedSegment.RecordNumber(), 5)
+	eq(t, s.LastCommitted.ID, 6)
+	eq(t, s.LastCommitted.Timestamp, at("20240101T000005000"))
+
+	j2 := open(t, clock, j1.Dir, journal.Options{MaxFileSize: 165})
+	s = must(j2.Summary())
+	eq(t, s.FirstUnsealedSegment.SegmentNumber(), 1)
+	eq(t, s.FirstUnsealedSegment.RecordNumber(), 1)
+	eq(t, s.LastUnsealedSegment.SegmentNumber(), 4)
+	eq(t, s.LastUnsealedSegment.RecordNumber(), 5)
+	eq(t, s.LastCommitted.ID, 6)
+	eq(t, s.LastCommitted.Timestamp, at("20240101T000005000"))
+
+}
+
 func TestJournalFlow_large(t *testing.T) {
 	clock := newClock()
 	j := setupWritable(t, clock, journal.Options{
@@ -86,7 +120,14 @@ func TestJournalFlow_large(t *testing.T) {
 	for i := range 10 {
 		clock.Advance(25 * time.Millisecond)
 		ensure(j.WriteRecord(0, []byte(fmt.Sprintf("record %d", i))))
+		s := must(j.Summary())
+		eq(t, s.LastCommitted.ID, uint64(5+i))
+		eq(t, s.LastRaw.ID, uint64(5+i+1))
+		eq(t, s.LastRaw.Timestamp, clock.NowTS())
 		ensure(j.FinishWriting())
+		s = must(j.Summary())
+		eq(t, s.LastCommitted.ID, uint64(5+i+1))
+		eq(t, s.LastCommitted.Timestamp, clock.NowTS())
 	}
 
 	deepEq(t, j.FileNames(), []string{
@@ -106,6 +147,14 @@ func TestJournalFlow_large(t *testing.T) {
 			t.Errorf("** record %d: got %q, wanted %q", i, string(a.Data), expected[i])
 		}
 	}
+
+	s := must(j.Summary())
+	eq(t, s.FirstUnsealedSegment.SegmentNumber(), 1)
+	eq(t, s.FirstUnsealedSegment.RecordNumber(), 1)
+	eq(t, s.LastUnsealedSegment.SegmentNumber(), 7)
+	eq(t, s.LastUnsealedSegment.RecordNumber(), 14)
+	eq(t, s.LastCommitted.ID, 15)
+	eq(t, s.LastCommitted.Timestamp, at("20240101T001640251"))
 }
 
 func TestJournalInternals(t *testing.T) {

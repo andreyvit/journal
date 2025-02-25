@@ -20,6 +20,15 @@ func (rec *Record) Time() time.Time {
 	return ToTime(rec.Timestamp)
 }
 
+type Meta struct {
+	ID        uint64
+	Timestamp uint64
+}
+
+func (meta *Meta) IsZero() bool { return meta.ID == 0 && meta.Timestamp == 0 }
+
+func (meta *Meta) Time() time.Time { return ToTime(meta.Timestamp) }
+
 type Cursor struct {
 	Record
 

@@ -127,6 +127,10 @@ func continueSegment(j *Journal, seg Segment) (*segmentWriter, error) {
 	}, nil
 }
 
+func (sw *segmentWriter) lastMeta() Meta {
+	return Meta{ID: sw.nextRec - 1, Timestamp: sw.ts}
+}
+
 func (sw *segmentWriter) writeRecord(ts uint64, data []byte) error {
 	var tsDelta uint64
 	if ts > sw.ts {

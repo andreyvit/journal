@@ -1,6 +1,7 @@
 package journal
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -9,6 +10,8 @@ import (
 )
 
 var timestampRe = regexp.MustCompile(`^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})$`)
+
+var ErrInvalidTimestamp = errors.New("invalid timestamp")
 
 func formatSegmentName(prefix, suffix string, seg Segment) string {
 	t := time.UnixMilli(int64(seg.ts)).UTC()
@@ -45,13 +48,10 @@ func parseSegmentName(prefix, suffix, name string) (Segment, error) {
 	if !ok {
 		return Segment{}, fmt.Errorf("invalid segment file name %q", origName)
 	}
-	var t time.Time
-	if m := timestampRe.FindStringSubmatch(tsStr); m != nil {
-		t = time.Date(atoi(m[1]), time.Month(atoi(m[2])), atoi(m[3]), atoi(m[4]), atoi(m[5]), atoi(m[6]), atoi(m[7])*1000_000, time.UTC)
-	} else {
-		return Segment{}, fmt.Errorf("invalid segment file name %q (invalid timestamp)", origName)
+	ts, err := ParseTime(tsStr)
+	if err != nil {
+		return Segment{}, fmt.Errorf("invalid segment file name %q (%w)", origName, err)
 	}
-	ts := uint64(t.UnixMilli())
 
 	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {
@@ -63,6 +63,15 @@ func parseSegmentName(prefix, suffix, name string) (Segment, error) {
 		segnum: seg,
 		status: status,
 	}, nil
+}
+
+func ParseTime(s string) (uint64, error) {
+	if m := timestampRe.FindStringSubmatch(s); m != nil {
+		t := time.Date(atoi(m[1]), time.Month(atoi(m[2])), atoi(m[3]), atoi(m[4]), atoi(m[5]), atoi(m[6]), atoi(m[7])*1000_000, time.UTC)
+		return ToTimestamp(t), nil
+	} else {
+		return 0, ErrInvalidTimestamp
+	}
 }
 
 func atoi(s string) int {

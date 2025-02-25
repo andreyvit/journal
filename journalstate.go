@@ -13,21 +13,11 @@ type journalState struct {
 	err         error
 	unsealed    []Segment
 	lastSealed  Segment
-}
 
-func (j *Journal) Initialize() error {
-	j.state.lock.Lock()
-	defer j.state.lock.Unlock()
-	return j.state.ensureInitialized(j)
-}
-
-func (j *Journal) SegmentCount() (int, error) {
-	j.state.lock.Lock()
-	defer j.state.lock.Unlock()
-	if err := j.state.ensureInitialized(j); err != nil {
-		return -1, err
-	}
-	return len(j.state.unsealed), nil
+	// set after startWriting, not after .initialize
+	lastKnown     bool
+	lastCommitted Meta
+	lastRaw       Meta
 }
 
 func (j *Journal) needsRotation(now uint64) (bool, error) {
@@ -86,6 +76,24 @@ func (j *Journal) updateStateWithSegmentFinalized(oldSeg, newSeg Segment) {
 	j.state.replaceSegment(oldSeg, newSeg)
 }
 
+func (j *Journal) setLastRecord(lastCommitted, lastRaw Meta) {
+	j.state.lock.Lock()
+	defer j.state.lock.Unlock()
+	j.state.setLastRecord(lastCommitted, lastRaw)
+}
+
+func (j *Journal) setLastUncommittedRecord(lastRaw Meta) {
+	j.state.lock.Lock()
+	defer j.state.lock.Unlock()
+	j.state.setLastUncommittedRecord(lastRaw)
+}
+
+func (j *Journal) setLastRecordUnknown() {
+	j.state.lock.Lock()
+	defer j.state.lock.Unlock()
+	j.state.setLastRecordUnknown()
+}
+
 func (js *journalState) reset() {
 	js.initialized = false
 	js.err = nil
@@ -135,6 +143,42 @@ func (js *journalState) last() Segment {
 	} else {
 		return js.lastSealed
 	}
+}
+
+func (js *journalState) summary() Summary {
+	s := Summary{
+		FirstSealedSegment: Segment{},
+		LastSealedSegment:  Segment{},
+		SegmentCount:       len(js.unsealed),
+		FirstRecordNumber:  0,
+		FirstTimestamp:     0,
+		LastCommitted:      js.lastCommitted,
+		LastRaw:            js.lastRaw,
+	}
+	if n := len(js.unsealed); n > 0 {
+		first := js.unsealed[0]
+		s.FirstUnsealedSegment = first
+		s.LastUnsealedSegment = js.unsealed[n-1]
+		s.SegmentCount = n
+		s.FirstRecordNumber = first.recnum
+		s.FirstTimestamp = first.ts
+	}
+	return s
+}
+
+func (js *journalState) setLastRecord(lastCommitted, lastRaw Meta) {
+	js.lastKnown = true
+	js.lastCommitted = lastCommitted
+	js.lastRaw = lastRaw
+}
+
+func (js *journalState) setLastRecordUnknown() {
+	js.lastKnown = false
+}
+
+func (js *journalState) setLastUncommittedRecord(lastRaw Meta) {
+	js.lastKnown = true
+	js.lastRaw = lastRaw
 }
 
 func (js *journalState) needsRotation(now uint64, rotopt *AutorotateOptions) bool {

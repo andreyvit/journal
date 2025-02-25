@@ -60,6 +60,10 @@ func (c *fakeClock) Advance(d time.Duration) {
 	a.Add(uint64(d.Milliseconds()))
 }
 
+func at(s string) uint64 {
+	return must(journal.ParseTime(s))
+}
+
 func concat(items ...string) string {
 	return strings.Join(items, " ")
 }

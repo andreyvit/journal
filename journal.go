@@ -177,6 +177,49 @@ func (j *Journal) String() string {
 	return j.debugName
 }
 
+func (j *Journal) Initialize() error {
+	j.state.lock.Lock()
+	defer j.state.lock.Unlock()
+	return j.state.ensureInitialized(j)
+}
+
+// Summary returns the general information about the journal, including the
+// last committed record. If necessary, it opens, verifies and repairs the
+// journal in the process.
+func (j *Journal) Summary() (Summary, error) {
+	s, ok, err := j.immediateSummary()
+	if ok || err != nil {
+		return s, err
+	}
+	err = j.writer.EnsurePreparedToWrite()
+	if err != nil {
+		return Summary{}, err
+	}
+	s, _, err = j.immediateSummary()
+	return s, err
+}
+
+// QuickSummary returns the general information about the journal, without
+// actually reading the journal data. So if the journal hasn't been opened
+// yet, last committed record information will not be available.
+func (j *Journal) QuickSummary() (Summary, error) {
+	s, _, err := j.immediateSummary()
+	return s, err
+}
+
+func (j *Journal) immediateSummary() (Summary, bool, error) {
+	j.state.lock.Lock()
+	defer j.state.lock.Unlock()
+	if err := j.state.ensureInitialized(j); err != nil {
+		return Summary{}, false, err
+	}
+	if j.state.lastKnown {
+		return j.state.summary(), true, nil
+	} else {
+		return Summary{}, false, nil
+	}
+}
+
 func (j *Journal) StartWriting() {
 	j.writer.StartWriting()
 }

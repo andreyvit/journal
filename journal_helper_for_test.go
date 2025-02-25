@@ -23,6 +23,10 @@ type testJournal struct {
 
 func setupWritable(t *testing.T, clock *fakeClock, o journal.Options) *testJournal {
 	dir := t.TempDir()
+	return open(t, clock, dir, o)
+}
+
+func open(t *testing.T, clock *fakeClock, dir string, o journal.Options) *testJournal {
 	if clock == nil {
 		clock = newClock()
 	}

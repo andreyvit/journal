@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 )
 
 type Segment struct {
@@ -15,6 +16,14 @@ type Segment struct {
 	segnum uint32
 	status Status
 }
+
+func (seg Segment) Timestamp() uint64 { return seg.ts }
+
+func (seg Segment) Time() time.Time { return ToTime(seg.ts) }
+
+func (seg Segment) RecordNumber() uint64 { return seg.recnum }
+
+func (seg Segment) SegmentNumber() uint32 { return seg.segnum }
 
 func (seg Segment) String() string {
 	return formatSegmentName("", "", seg)
