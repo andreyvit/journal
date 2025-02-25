@@ -30,7 +30,7 @@ type journalWriter struct {
 	writable   bool
 	writeErr   error
 	segWriter  *segmentWriter
-	nextSegNum uint32
+	nextSegNum uint64
 	nextRecNum uint64
 }
 

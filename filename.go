@@ -38,11 +38,10 @@ func parseSegmentName(prefix, suffix, name string) (Segment, error) {
 	if !ok {
 		return Segment{}, fmt.Errorf("invalid segment file name %q", origName)
 	}
-	v, err := strconv.ParseUint(segStr, 10, 32)
+	seg, err := strconv.ParseUint(segStr, 10, 64)
 	if err != nil {
 		return Segment{}, fmt.Errorf("invalid segment file name %q (invalid segment number)", origName)
 	}
-	seg := uint32(v)
 
 	tsStr, idStr, ok := strings.Cut(rem, "-")
 	if !ok {

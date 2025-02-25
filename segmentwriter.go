@@ -24,7 +24,7 @@ type segmentWriter struct {
 	firstUncommittedWriteTS uint64
 }
 
-func startSegment(j *Journal, segnum uint32, ts uint64, rec uint64) (*segmentWriter, error) {
+func startSegment(j *Journal, segnum, ts, rec uint64) (*segmentWriter, error) {
 	seg := Segment{
 		ts:     ts,
 		recnum: rec,

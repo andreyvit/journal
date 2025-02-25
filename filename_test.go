@@ -9,7 +9,7 @@ func TestParseName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e := uint32(123); seg.segnum != e {
+	if e := uint64(123); seg.segnum != e {
 		t.Errorf("seq = %v, expected %v", seg.segnum, e)
 	}
 	if e := uint64(1672531200123); seg.ts != e {

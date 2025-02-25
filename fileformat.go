@@ -18,8 +18,7 @@ const (
 
 type segmentHeader struct {
 	Magic             uint64   // offset 0
-	SegmentNumber     uint32   // offset 8
-	_                 uint32   // offset 12
+	SegmentNumber     uint64   // offset 8
 	FirstTimestamp    uint64   // offset 16
 	FirstRecordNumber uint64   // offset 24
 	LastTimestamp     uint64   // offset 32
@@ -34,7 +33,7 @@ const segmentHeaderSize = 128
 
 const maxRecHeaderLen = binary.MaxVarintLen64 /* sizeAndFlag */ + binary.MaxVarintLen64 /* timestamp */
 
-func fillSegmentHeader(buf []byte, j *Journal, magic uint64, segnum uint32, firstTS, firstRecNum, lastTS, lastRecNum uint64) {
+func fillSegmentHeader(buf []byte, j *Journal, magic uint64, segnum, firstTS, firstRecNum, lastTS, lastRecNum uint64) {
 	h := segmentHeader{
 		Magic:             magic,
 		SegmentNumber:     segnum,

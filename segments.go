@@ -13,7 +13,7 @@ import (
 type Segment struct {
 	ts     uint64
 	recnum uint64
-	segnum uint32
+	segnum uint64
 	status Status
 }
 
@@ -23,7 +23,7 @@ func (seg Segment) Time() time.Time { return ToTime(seg.ts) }
 
 func (seg Segment) RecordNumber() uint64 { return seg.recnum }
 
-func (seg Segment) SegmentNumber() uint32 { return seg.segnum }
+func (seg Segment) SegmentNumber() uint64 { return seg.segnum }
 
 func (seg Segment) String() string {
 	return formatSegmentName("", "", seg)
