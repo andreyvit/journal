@@ -25,7 +25,7 @@ type segmentHeader struct {
 	LastRecordNumber  uint64   // offset 40
 	JournalInvariant  [32]byte // offset 48
 	SegmentInvariant  [32]byte // offset 80
-	_                 uint64   // offset 112
+	UnsealedDataSize  uint64   // offset 112
 	HeaderChecksum    uint64   // offset 120
 } // size 128
 
