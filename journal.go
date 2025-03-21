@@ -67,7 +67,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/andreyvit/sealer"
 )
 
 var (
@@ -92,6 +95,9 @@ type Options struct {
 	Verbose bool
 
 	OnChange func()
+
+	SealKeys []*sealer.Key
+	SealOpts sealer.SealOptions
 }
 
 type AutorotateOptions struct {
@@ -120,9 +126,13 @@ type Journal struct {
 	onChange         func()
 	autorotate       AutorotateOptions
 	autocommit       AutocommitOptions
+	sealKeys         []*sealer.Key
+	sealOpts         sealer.SealOptions
 
-	state  journalState
-	writer journalWriter
+	state    journalState
+	writer   journalWriter
+	sealLock sync.Mutex
+	trimLock sync.Mutex
 }
 
 func New(dir string, o Options) *Journal {
@@ -160,6 +170,8 @@ func New(dir string, o Options) *Journal {
 		onChange:         o.OnChange,
 		autorotate:       o.Autorotate,
 		autocommit:       o.Autocommit,
+		sealKeys:         o.SealKeys,
+		sealOpts:         o.SealOpts,
 	}
 	j.writer.j = j
 	return j

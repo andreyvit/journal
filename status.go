@@ -23,6 +23,8 @@ func (s Status) IsSealed() bool { return s == Sealed }
 
 func (s Status) IsDraft() bool { return s == Draft }
 
+func (s Status) CanSeal() bool { return s == Finalized }
+
 func cutStatusPrefix(s string) (Status, string) {
 	if r, ok := strings.CutPrefix(s, finalizedPrefix); ok {
 		return Finalized, r

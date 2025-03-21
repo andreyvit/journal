@@ -50,5 +50,5 @@ func TestSet(t *testing.T) {
 	eq(t, set.Process(context.Background()), 2)
 
 	clock.Advance(time.Hour)
-	eq(t, set.Process(context.Background()), 2)
+	eq(t, set.Process(context.Background()), 6)
 }

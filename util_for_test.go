@@ -68,6 +68,13 @@ func concat(items ...string) string {
 	return strings.Join(items, " ")
 }
 
+func ok(t testing.TB, ok bool) {
+	if !ok {
+		t.Helper()
+		t.Fatalf("** condition mismatched")
+	}
+}
+
 func eq[T comparable](t testing.TB, a, e T) {
 	if a != e {
 		t.Helper()
@@ -270,4 +277,30 @@ func appendHexDecoding(data []byte, hex string) ([]byte, error) {
 		data = append(data, prev)
 	}
 	return data, nil
+}
+
+func recsStr(recs []journal.Record, first uint64) []string {
+	var b strings.Builder
+	var result []string
+	for i, rec := range recs {
+		b.Reset()
+		if e := first + uint64(i); rec.ID != e {
+			fmt.Fprintf(&b, "[**ID=%d,wanted=%d**]", rec.ID, e)
+		}
+		b.WriteString(journal.TimeToStr(rec.Time()))
+		b.WriteByte(':')
+		b.Write(rec.Data)
+		result = append(result, b.String())
+	}
+	return result
+}
+
+func recsEq(t testing.TB, recs []journal.Record, start uint64, e ...string) bool {
+	a := recsStr(recs, start)
+	if !reflect.DeepEqual(a, e) {
+		t.Helper()
+		t.Fatalf("** got:\n%v\n\nwanted:\n%v", a, e)
+		return false
+	}
+	return true
 }

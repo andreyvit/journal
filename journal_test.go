@@ -157,6 +157,27 @@ func TestJournalFlow_large(t *testing.T) {
 	eq(t, s.LastCommitted.Timestamp, at("20240101T001640251"))
 }
 
+func TestJournalFlow_read_filter(t *testing.T) {
+	clock := newClock()
+	j1 := setupWritable(t, clock, journal.Options{MaxFileSize: 165})
+	ensure(j1.WriteRecord(0, []byte("hello")))
+	clock.Advance(time.Second)
+	ensure(j1.WriteRecord(0, []byte("w")))
+	clock.Advance(time.Second)
+	ensure(j1.WriteRecord(0, []byte(strings.Repeat("huge", 100))))
+	clock.Advance(time.Second)
+	ensure(j1.WriteRecord(0, []byte(strings.Repeat("another", 100))))
+	clock.Advance(time.Second)
+	ensure(j1.WriteRecord(0, []byte("x")))
+	clock.Advance(time.Second)
+	ensure(j1.WriteRecord(0, []byte("y")))
+	ensure(j1.FinishWriting())
+
+	t.Run("minid", func(t *testing.T) {
+
+	})
+}
+
 func TestJournalInternals(t *testing.T) {
 	// very useful one-liner for this test:
 	//

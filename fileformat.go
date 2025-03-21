@@ -64,3 +64,9 @@ func appendRecordHeader(b []byte, size int, tsDelta uint64) []byte {
 	b = binary.AppendUvarint(b, uint64(tsDelta))
 	return b
 }
+
+func appendSealedRecordHeader(b []byte, size int, tsDelta uint64) []byte {
+	b = binary.AppendUvarint(b, uint64(size))
+	b = binary.AppendUvarint(b, uint64(tsDelta))
+	return b
+}

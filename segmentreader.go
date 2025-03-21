@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/andreyvit/sealer"
 	"github.com/cespare/xxhash/v2"
 )
 
@@ -15,6 +16,8 @@ type segmentReader struct {
 	f             *os.File
 	r             *bufio.Reader
 	dataHash      xxhash.Digest
+	h             segmentHeader
+	hbuf          [segmentHeaderSize]byte
 	seg           Segment
 	rec           uint64
 	ts            uint64
@@ -23,6 +26,8 @@ type segmentReader struct {
 	committedRec  uint64
 	committedTS   uint64
 	committedSize int64
+	lastTS        uint64
+	lastRec       uint64
 	data          []byte
 }
 
@@ -54,13 +59,32 @@ func openSegment(j *Journal, seg Segment) (*os.File, *segmentReader, error) {
 	var ok bool
 	defer closeUnlessOK(f, &ok)
 
-	r, err := newSegmentReader(j, f, seg)
+	sr, err := newSegmentReader(j, f, seg)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	if seg.status.IsSealed() {
+		opn, err := sealer.Prepare(sr.r, sr.hbuf[:])
+		if err != nil {
+			return nil, nil, err
+		}
+
+		key := j.findKey(opn.KeyID)
+		if key == nil {
+			return nil, nil, ErrMissingSealKey
+		}
+
+		r, err := opn.Open(key)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		sr.r = bufio.NewReader(r)
+	}
+
 	ok = true
-	return f, r, nil
+	return f, sr, nil
 }
 
 func loadSegmentHeader(j *Journal, h *segmentHeader, seg Segment) error {
@@ -73,7 +97,8 @@ func loadSegmentHeader(j *Journal, h *segmentHeader, seg Segment) error {
 	}
 	defer f.Close()
 
-	return readSegmentHeader(j, f, h, seg)
+	var hbuf [segmentHeaderSize]byte
+	return readSegmentHeader(j, f, h, seg, &hbuf)
 }
 
 func newSegmentReader(j *Journal, f *os.File, seg Segment) (*segmentReader, error) {
@@ -91,8 +116,7 @@ func newSegmentReader(j *Journal, f *os.File, seg Segment) (*segmentReader, erro
 	}
 	sr.dataHash.Reset()
 
-	var h segmentHeader
-	err := readSegmentHeader(j, f, &h, seg)
+	err := readSegmentHeader(j, f, &sr.h, seg, &sr.hbuf)
 	if err != nil {
 		return sr, err
 	}
@@ -102,12 +126,13 @@ func newSegmentReader(j *Journal, f *os.File, seg Segment) (*segmentReader, erro
 }
 
 func (sr *segmentReader) next() error {
+	isUnsealed := !sr.seg.status.IsSealed()
 	for {
 		b, err := sr.r.Peek(maxRecHeaderLen)
 		if err == io.EOF {
 			if len(b) == 0 {
 				// end of file; was there a commit?
-				if sr.size == sr.committedSize {
+				if !isUnsealed || sr.size == sr.committedSize {
 					return io.EOF
 				} else {
 					if sr.j.verbose {
@@ -119,7 +144,7 @@ func (sr *segmentReader) next() error {
 		} else if err != nil {
 			return err
 		}
-		if b[0]&recordFlagCommit != 0 {
+		if isUnsealed && (b[0]&recordFlagCommit != 0) {
 			var b [8]byte
 			_, err := io.ReadFull(sr.r, b[:])
 			if err == io.ErrUnexpectedEOF {
@@ -163,7 +188,12 @@ func (sr *segmentReader) next() error {
 				}
 				return errCorruptedFile
 			}
-			dataSize := int(rawSize / 2)
+			var dataSize int
+			if isUnsealed {
+				dataSize = int(rawSize / 2)
+			} else {
+				dataSize = int(rawSize)
+			}
 
 			tsdelta, n2 := binary.Uvarint(b[n1:])
 			if n2 <= 0 {
@@ -178,7 +208,9 @@ func (sr *segmentReader) next() error {
 			// }
 
 			n := n1 + n2
-			sr.dataHash.Write(b[:n])
+			if isUnsealed {
+				sr.dataHash.Write(b[:n])
+			}
 			sr.r.Discard(n)
 
 			if cap(sr.data) < dataSize {
@@ -196,12 +228,19 @@ func (sr *segmentReader) next() error {
 			} else if err != nil {
 				return err
 			}
-			sr.dataHash.Write(sr.data)
 
 			sr.recordsInSeg++
 			sr.rec++
 			sr.ts += tsdelta
 			sr.size += int64(n + dataSize)
+
+			if isUnsealed {
+				sr.dataHash.Write(sr.data)
+			} else {
+				sr.committedRec = sr.rec
+				sr.committedTS = sr.ts
+				sr.committedSize = sr.size
+			}
 
 			if sr.j.verbose {
 				sr.j.logger.Debug("record decoded", "journal", sr.j.debugName, "data", string(sr.data), "hash", fmt.Sprintf("%08x", sr.dataHash.Sum64()))
@@ -212,8 +251,7 @@ func (sr *segmentReader) next() error {
 	}
 }
 
-func readSegmentHeader(j *Journal, r io.Reader, h *segmentHeader, seg Segment) error {
-	var buf [segmentHeaderSize]byte
+func readSegmentHeader(j *Journal, r io.Reader, h *segmentHeader, seg Segment, buf *[segmentHeaderSize]byte) error {
 	_, err := io.ReadFull(r, buf[:])
 	if err == io.ErrUnexpectedEOF || err == io.EOF {
 		return errCorruptedFile

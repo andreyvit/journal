@@ -2,6 +2,7 @@ package journal
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -11,8 +12,10 @@ type journalState struct {
 	lock        sync.Mutex
 	initialized bool
 	err         error
-	unsealed    []Segment
+	unsealed    []Segment // still considering if we're storing this
+	sealed      []Segment
 	lastSealed  Segment
+	sealingTemp Segment
 
 	// set after startWriting, not after .initialize
 	lastKnown     bool
@@ -48,8 +51,36 @@ func (j *Journal) findKnownSegments(filter Filter) ([]Segment, error) {
 	if err := j.state.ensureInitialized(j); err != nil {
 		return nil, err
 	}
-	segs, _ := j.state.findKnownSegments(filter)
+	segs, _ := j.state.findUnsealedSegments(filter)
+	more, _ := j.state.findKnownSealedSegments(filter)
+	if len(more) > 0 {
+		segs = append(more, segs...)
+	}
 	return segs, nil
+}
+
+func (j *Journal) nextToSeal() (Segment, error) {
+	j.state.lock.Lock()
+	defer j.state.lock.Unlock()
+	if err := j.state.ensureInitialized(j); err != nil {
+		return Segment{}, err
+	}
+	return j.state.nextToSeal(), nil
+}
+
+func (j *Journal) nextToTrim() (Segment, error) {
+	j.state.lock.Lock()
+	defer j.state.lock.Unlock()
+	if err := j.state.ensureInitialized(j); err != nil {
+		return Segment{}, err
+	}
+	return j.state.nextToTrim(), nil
+}
+
+func (j *Journal) setSealingTemp(seg Segment) {
+	j.state.lock.Lock()
+	defer j.state.lock.Unlock()
+	j.state.sealingTemp = seg
 }
 
 func (j *Journal) resetState() {
@@ -116,13 +147,21 @@ func (js *journalState) ensureInitialized(j *Journal) error {
 
 func (js *journalState) initialize(j *Journal) error {
 	var lastSealed Segment
+	var sealed []Segment
 	var unsealed []Segment
 	err := j.enumSegments(func(seg Segment) error {
-		if seg.status.IsSealed() {
+		switch seg.status {
+		case sealingTemp:
+			err := os.Remove(j.filePath(seg.fileName(j)))
+			if err != nil {
+				return err
+			}
+		case Sealed:
 			if lastSealed.IsZero() || compareSegments(seg, lastSealed) > 0 {
 				lastSealed = seg
 			}
-		} else {
+			sealed = append(sealed, seg)
+		default:
 			unsealed = append(unsealed, seg)
 		}
 		return nil
@@ -131,7 +170,9 @@ func (js *journalState) initialize(j *Journal) error {
 		return err
 	}
 
+	slices.SortFunc(sealed, compareSegments)
 	slices.SortFunc(unsealed, compareSegments)
+	js.sealed = sealed
 	js.unsealed = unsealed
 	js.lastSealed = lastSealed
 	return nil
@@ -143,6 +184,26 @@ func (js *journalState) last() Segment {
 	} else {
 		return js.lastSealed
 	}
+}
+
+func (js *journalState) nextToSeal() Segment {
+	last := js.lastSealed
+	for _, seg := range js.unsealed {
+		if last.IsZero() || seg.segnum > last.segnum {
+			return seg
+		}
+	}
+	return Segment{}
+}
+
+func (js *journalState) nextToTrim() Segment {
+	if n := len(js.unsealed); n > 0 {
+		seg := js.unsealed[0]
+		if js.lastSealed.IsNonZero() && seg.segnum <= js.lastSealed.segnum {
+			return seg
+		}
+	}
+	return Segment{}
 }
 
 func (js *journalState) summary() Summary {
@@ -190,13 +251,26 @@ func (js *journalState) addSegment(j *Journal, seg Segment) {
 	if !js.initialized {
 		return
 	}
-	if n := len(js.unsealed); n > 0 {
-		prev := js.unsealed[n-1]
-		if compareSegments(seg, prev) <= 0 {
-			panic(fmt.Errorf("internal error: %v: adding segment %v after %v", j, seg, prev))
+	if seg.status.IsSealed() {
+		if js.lastSealed.IsZero() || compareSegments(seg, js.lastSealed) > 0 {
+			js.lastSealed = seg
 		}
+		if n := len(js.sealed); n > 0 {
+			prev := js.sealed[n-1]
+			if compareSegments(seg, prev) <= 0 {
+				panic(fmt.Errorf("internal error: %v: adding sealed segment %v after %v", j, seg, prev))
+			}
+		}
+		js.sealed = append(js.sealed, seg)
+	} else {
+		if n := len(js.unsealed); n > 0 {
+			prev := js.unsealed[n-1]
+			if compareSegments(seg, prev) <= 0 {
+				panic(fmt.Errorf("internal error: %v: adding unsealed segment %v after %v", j, seg, prev))
+			}
+		}
+		js.unsealed = append(js.unsealed, seg)
 	}
-	js.unsealed = append(js.unsealed, seg)
 }
 
 func (js *journalState) removeSegment(seg Segment) {
@@ -221,7 +295,54 @@ func (js *journalState) replaceSegment(oldSeg, newSeg Segment) {
 	}
 }
 
-func (js *journalState) findKnownSegments(filter Filter) ([]Segment, bool) {
+func (js *journalState) findKnownSealedSegments(filter Filter) ([]Segment, bool) {
+	sealed := js.sealedSegmentsBeforeUnsealed()
+
+	end := len(sealed)
+	for end > 0 {
+		last := sealed[end-1]
+		if (filter.MaxRecordID > 0 && last.recnum > filter.MaxRecordID) || (filter.MaxTimestamp > 0 && last.ts > filter.MaxTimestamp) {
+			end--
+			continue
+		}
+		break
+	}
+
+	start := 0
+	exactMatch := false
+	for start < end {
+		first := sealed[start]
+		if first.recnum == filter.MinRecordID && first.ts == filter.MinTimestamp {
+			exactMatch = true
+			break
+		} else if first.recnum >= filter.MinRecordID && first.ts >= filter.MinTimestamp {
+			break
+		}
+		start++
+	}
+	if exactMatch {
+		return sealed[start:end], false
+	} else if start > 0 {
+		return sealed[start-1 : end], false
+	} else {
+		return sealed[0:end], true
+	}
+}
+
+func (js *journalState) sealedSegmentsBeforeUnsealed() []Segment {
+	sealed := js.sealed
+	if len(js.unsealed) == 0 {
+		return sealed
+	}
+
+	first := js.unsealed[0]
+	for len(sealed) > 0 && sealed[len(sealed)-1].segnum >= first.segnum {
+		sealed = sealed[:len(sealed)-1]
+	}
+	return sealed
+}
+
+func (js *journalState) findUnsealedSegments(filter Filter) ([]Segment, bool) {
 	unsealed := js.unsealed
 
 	end := len(unsealed)

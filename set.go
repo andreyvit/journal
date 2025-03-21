@@ -9,8 +9,10 @@ import (
 )
 
 type SetOptions struct {
-	Now    func() time.Time
-	Logger *slog.Logger
+	Now             func() time.Time
+	Logger          *slog.Logger
+	AutosealEnabled bool
+	AutosealDelay   time.Duration
 }
 
 type Set struct {
@@ -19,6 +21,9 @@ type Set struct {
 
 	lock      sync.Mutex
 	_journals []*Journal
+
+	autosealEnabled bool
+	autosealDelay   time.Duration
 }
 
 type SetRunner struct {
@@ -35,8 +40,10 @@ func NewSet(opt SetOptions) *Set {
 		opt.Logger = slog.Default()
 	}
 	return &Set{
-		now:    opt.Now,
-		logger: opt.Logger,
+		now:             opt.Now,
+		logger:          opt.Logger,
+		autosealEnabled: opt.AutosealEnabled,
+		autosealDelay:   opt.AutosealDelay,
 	}
 }
 
@@ -62,6 +69,10 @@ func (set *Set) Journals() []*Journal {
 }
 
 func (set *Set) Process(ctx context.Context) int {
+	return set.Autocommit(ctx) + set.Autoseal(ctx)
+}
+
+func (set *Set) Autocommit(ctx context.Context) int {
 	journals := set.Journals()
 	now := ToTimestamp(set.now())
 	var actions int
@@ -87,6 +98,26 @@ func (set *Set) Process(ctx context.Context) int {
 	return actions
 }
 
+func (set *Set) Autoseal(ctx context.Context) int {
+	journals := set.Journals()
+	var actions int
+	for _, j := range journals {
+		if ctx.Err() != nil {
+			return actions
+		}
+		n, err := j.SealAndTrimOnce(ctx)
+		actions += n
+		if err != nil {
+			j.logger.Error("seal/trim error", "err", err)
+			continue
+		}
+		if n > 0 && set.autosealDelay > 0 {
+			time.Sleep(set.autosealDelay)
+		}
+	}
+	return actions
+}
+
 func (set *Set) StartBackground(ctx context.Context) *SetRunner {
 	ctx, cancel := context.WithCancel(ctx)
 	runner := &SetRunner{
@@ -94,7 +125,11 @@ func (set *Set) StartBackground(ctx context.Context) *SetRunner {
 		shutdown: cancel,
 	}
 	runner.wg.Add(1)
-	go runner.run(ctx, &runner.wg)
+	go runPeriodical(ctx, &runner.wg, set.Autocommit, time.Second)
+	if set.autosealEnabled {
+		runner.wg.Add(1)
+		go runPeriodical(ctx, &runner.wg, set.Autoseal, 2*time.Second)
+	}
 	return runner
 }
 
@@ -103,11 +138,10 @@ func (runner *SetRunner) Close() {
 	runner.wg.Wait()
 }
 
-func (runner *SetRunner) run(ctx context.Context, wg *sync.WaitGroup) {
+func runPeriodical(ctx context.Context, wg *sync.WaitGroup, f func(ctx context.Context) int, interval time.Duration) {
 	defer wg.Done()
-	set := runner.set
 	for {
-		timer := time.NewTimer(time.Second)
+		timer := time.NewTimer(interval)
 		select {
 		case <-timer.C:
 			break
@@ -115,7 +149,6 @@ func (runner *SetRunner) run(ctx context.Context, wg *sync.WaitGroup) {
 			timer.Stop()
 			return
 		}
-
-		set.Process(ctx)
+		f(ctx)
 	}
 }

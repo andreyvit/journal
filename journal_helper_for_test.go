@@ -2,6 +2,7 @@ package journal_test
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,7 +10,13 @@ import (
 	"testing/fstest"
 
 	"github.com/andreyvit/journal"
+	"github.com/andreyvit/sealer"
 )
+
+var sealKey = &sealer.Key{
+	ID:  [32]byte{'X'},
+	Key: [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
+}
 
 type testJournal struct {
 	*journal.Journal
@@ -21,12 +28,16 @@ type testJournal struct {
 	clock *fakeClock
 }
 
-func setupWritable(t *testing.T, clock *fakeClock, o journal.Options) *testJournal {
+type nonVerboseOpt struct{}
+
+var nonVerbose = nonVerboseOpt{}
+
+func setupWritable(t testing.TB, clock *fakeClock, o journal.Options, opts ...any) *testJournal {
 	dir := t.TempDir()
-	return open(t, clock, dir, o)
+	return open(t, clock, dir, o, opts...)
 }
 
-func open(t *testing.T, clock *fakeClock, dir string, o journal.Options) *testJournal {
+func open(t testing.TB, clock *fakeClock, dir string, o journal.Options, opts ...any) *testJournal {
 	if clock == nil {
 		clock = newClock()
 	}
@@ -37,10 +48,20 @@ func open(t *testing.T, clock *fakeClock, dir string, o journal.Options) *testJo
 
 		clock: clock,
 	}
+	o.SealKeys = []*sealer.Key{sealKey}
 	o.FileName = "j*.wal"
 	o.Now = j.clock.Now
 	o.Logger = testLogger(t)
 	o.Verbose = true
+
+	for _, opt := range opts {
+		switch opt.(type) {
+		case nonVerboseOpt:
+			o.Verbose = false
+		default:
+			panic(fmt.Sprintf("unsupported option type: %T", opt))
+		}
+	}
 
 	j.Journal = journal.New(dir, o)
 	j.StartWriting()
@@ -63,8 +84,10 @@ func (j *testJournal) Put(fileName string, expected ...string) {
 }
 
 func (j *testJournal) All(filter journal.Filter) []journal.Record {
+	j.T.Helper()
 	var result []journal.Record
 	fail := func(err error) {
+		j.T.Helper()
 		j.T.Fatalf("journal error: %v", err)
 	}
 	for rec := range j.Journal.Records(filter, fail) {

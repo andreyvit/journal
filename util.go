@@ -24,6 +24,16 @@ func closeAndDeleteUnlessOK(f *os.File, ok *bool) {
 	os.Remove(f.Name())
 }
 
+func closeAndDeleteUnlessOK2(f **os.File, name string, ok *bool) {
+	if *ok {
+		return
+	}
+	if ff := *f; ff != nil {
+		ff.Close()
+	}
+	os.Remove(name)
+}
+
 func closeUnlessOK(f *os.File, ok *bool) {
 	if *ok {
 		return

@@ -30,6 +30,9 @@ func (seg Segment) FirstRecord() Meta {
 }
 
 func (seg Segment) String() string {
+	if seg.IsZero() {
+		return ""
+	}
 	return formatSegmentName("", "", seg)
 }
 

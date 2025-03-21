@@ -18,6 +18,11 @@ func formatSegmentName(prefix, suffix string, seg Segment) string {
 	return fmt.Sprintf("%s%s%010d-%04d%02d%02dT%02d%02d%02d%03d-%012d%s", prefix, seg.status.prefix(), seg.segnum, t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond()/1e6, seg.recnum, suffix)
 }
 
+func TimeToStr(t time.Time) string {
+	t = t.UTC()
+	return fmt.Sprintf("%04d%02d%02dT%02d%02d%02d%03d", t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond()/1e6)
+}
+
 func parseSegmentName(prefix, suffix, name string) (Segment, error) {
 	origName := name
 	name, ok := strings.CutPrefix(name, prefix)
