@@ -3,7 +3,7 @@ module github.com/andreyvit/journal
 go 1.23.3
 
 require (
-	github.com/andreyvit/sealer v0.1.0
+	github.com/andreyvit/sealer v0.2.0
 	github.com/cespare/xxhash/v2 v2.3.0
 )
 
