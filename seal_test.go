@@ -80,6 +80,74 @@ func TestJournalSeal_more(t *testing.T) {
 	recsEq(t, j2.All(journal.Filter{}), 1, seqContent...)
 }
 
+func TestJournalSeal_bug_601(t *testing.T) {
+	j := setupWritable(t, newClock(), journal.Options{
+		MaxFileSize: 165,
+	})
+	writeN(j, 10)
+	ensure(j.Journal.Rotate())
+	must(j.SealAndTrimAll(context.Background()))
+	deepEq(j.T, j.FileNames(), []string{
+		"jS0000000001-20240101T000000000-000000000001.wal",
+		"jS0000000002-20240101T000005000-000000000006.wal",
+	})
+	s := must(j.Journal.Summary())
+	eq(t, s.LastUnsealedSegment.String(), "")
+	eq(t, s.LastSealedSegment.String(), "S0000000002-20240101T000005000-000000000006")
+	eq(t, s.LastCommitted.ID, 10)
+
+	j = open(t, j.clock, j.Dir, journal.Options{MaxFileSize: 165})
+	s = must(j.Journal.Summary())
+	eq(t, s.LastUnsealedSegment.String(), "")
+	eq(t, s.LastSealedSegment.String(), "S0000000002-20240101T000005000-000000000006")
+	eq(t, s.LastCommitted.ID, 10)
+
+	writeN(j, 10)
+	ensure(j.Journal.Rotate())
+	must(j.SealAndTrimAll(context.Background()))
+	deepEq(j.T, j.FileNames(), []string{
+		"jS0000000001-20240101T000000000-000000000001.wal",
+		"jS0000000002-20240101T000005000-000000000006.wal",
+		"jS0000000003-20240101T000010000-000000000011.wal",
+		"jS0000000004-20240101T000015000-000000000016.wal",
+	})
+
+	j = open(t, j.clock, j.Dir, journal.Options{MaxFileSize: 165})
+	writeN(j, 10)
+	ensure(j.Journal.FinishWriting())
+	deepEq(j.T, j.FileNames(), []string{
+		"jS0000000001-20240101T000000000-000000000001.wal",
+		"jS0000000002-20240101T000005000-000000000006.wal",
+		"jS0000000003-20240101T000010000-000000000011.wal",
+		"jS0000000004-20240101T000015000-000000000016.wal",
+		"jF0000000005-20240101T000020000-000000000021.wal",
+		"jW0000000006-20240101T000025000-000000000026.wal",
+	})
+
+	j = open(t, j.clock, j.Dir, journal.Options{MaxFileSize: 165})
+	must(j.SealAndTrimAll(context.Background()))
+	deepEq(j.T, j.FileNames(), []string{
+		"jS0000000001-20240101T000000000-000000000001.wal",
+		"jS0000000002-20240101T000005000-000000000006.wal",
+		"jS0000000003-20240101T000010000-000000000011.wal",
+		"jS0000000004-20240101T000015000-000000000016.wal",
+		"jS0000000005-20240101T000020000-000000000021.wal",
+		"jW0000000006-20240101T000025000-000000000026.wal",
+	})
+	ensure(j.Journal.Rotate())
+
+	j = open(t, j.clock, j.Dir, journal.Options{MaxFileSize: 165})
+	must(j.SealAndTrimAll(context.Background()))
+	deepEq(j.T, j.FileNames(), []string{
+		"jS0000000001-20240101T000000000-000000000001.wal",
+		"jS0000000002-20240101T000005000-000000000006.wal",
+		"jS0000000003-20240101T000010000-000000000011.wal",
+		"jS0000000004-20240101T000015000-000000000016.wal",
+		"jS0000000005-20240101T000020000-000000000021.wal",
+		"jS0000000006-20240101T000025000-000000000026.wal",
+	})
+}
+
 func BenchmarkJournalSeal(b *testing.B) {
 	b.StopTimer()
 	for range b.N {
@@ -159,4 +227,12 @@ func writeSeq(j *testJournal) {
 		"jF0000000004-20240101T000342000-000000000007.wal",
 		"jW0000000005-20240101T020342000-000000000009.wal",
 	})
+}
+
+func writeN(j *testJournal, n int) {
+	j.T.Helper()
+	for range n {
+		ensure(j.WriteRecord(0, []byte("test")))
+		j.clock.Advance(1 * time.Second)
+	}
 }

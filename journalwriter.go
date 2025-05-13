@@ -122,6 +122,12 @@ func (jw *journalWriter) prepareToWrite_locked_once(failed *Segment) error {
 			*failed = last
 			return err
 		}
+		if jw.j.verbose {
+			jw.j.logger.Debug("journal last segment is finalized", "journal", jw.j.debugName, "seg", last, "h", h)
+		}
+
+		jw.nextSegNum = last.segnum + 1
+		jw.nextRecNum = h.LastRecordNumber + 1
 
 		lastRec := Meta{ID: h.LastRecordNumber, Timestamp: h.LastTimestamp}
 		jw.j.setLastRecord(lastRec, lastRec)

@@ -2,6 +2,7 @@ package journal_test
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -113,6 +114,11 @@ func (j *testJournal) FileNames() []string {
 	for _, env := range must(os.ReadDir(j.Dir)) {
 		names = append(names, env.Name())
 	}
-	slices.Sort(names)
+	slices.SortFunc(names, func(a, b string) int {
+		return cmp.Or(
+			cmp.Compare(a[2:], b[2:]),
+			cmp.Compare(a, b),
+		)
+	})
 	return names
 }

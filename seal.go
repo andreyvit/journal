@@ -130,7 +130,7 @@ func (j *Journal) Seal(ctx context.Context) (Segment, error) {
 	defer closeAndDeleteUnlessOK2(&outf, temp, &ok)
 
 	var hbuf [segmentHeaderSize]byte
-	fillSegmentHeader(hbuf[:], j, magicV1Sealed, tempseg.segnum, tempseg.ts, tempseg.recnum, sr.lastTS, sr.lastRec)
+	fillSegmentHeader(hbuf[:], j, magicV1Sealed, tempseg.segnum, tempseg.ts, tempseg.recnum, sr.h.LastTimestamp, sr.h.LastRecordNumber)
 
 	sealw, err := sealer.Seal(outf, sealKey, hbuf[:], j.sealOpts)
 	if err != nil {

@@ -14,7 +14,6 @@ type journalState struct {
 	err         error
 	unsealed    []Segment // still considering if we're storing this
 	sealed      []Segment
-	lastSealed  Segment
 	sealingTemp Segment
 
 	// set after startWriting, not after .initialize
@@ -146,7 +145,6 @@ func (js *journalState) ensureInitialized(j *Journal) error {
 }
 
 func (js *journalState) initialize(j *Journal) error {
-	var lastSealed Segment
 	var sealed []Segment
 	var unsealed []Segment
 	err := j.enumSegments(func(seg Segment) error {
@@ -157,9 +155,6 @@ func (js *journalState) initialize(j *Journal) error {
 				return err
 			}
 		case Sealed:
-			if lastSealed.IsZero() || compareSegments(seg, lastSealed) > 0 {
-				lastSealed = seg
-			}
 			sealed = append(sealed, seg)
 		default:
 			unsealed = append(unsealed, seg)
@@ -174,20 +169,37 @@ func (js *journalState) initialize(j *Journal) error {
 	slices.SortFunc(unsealed, compareSegments)
 	js.sealed = sealed
 	js.unsealed = unsealed
-	js.lastSealed = lastSealed
 	return nil
 }
 
 func (js *journalState) last() Segment {
+	u := js.lastUnsealed()
+	s := js.lastSealed()
+	if u.IsZero() || (s.IsNonZero() && s.segnum > u.segnum) {
+		return s
+	} else {
+		return u
+	}
+}
+
+func (js *journalState) lastUnsealed() Segment {
 	if n := len(js.unsealed); n > 0 {
 		return js.unsealed[n-1]
 	} else {
-		return js.lastSealed
+		return Segment{}
+	}
+}
+
+func (js *journalState) lastSealed() Segment {
+	if n := len(js.sealed); n > 0 {
+		return js.sealed[n-1]
+	} else {
+		return Segment{}
 	}
 }
 
 func (js *journalState) nextToSeal() Segment {
-	last := js.lastSealed
+	last := js.lastSealed()
 	for _, seg := range js.unsealed {
 		if last.IsZero() || seg.segnum > last.segnum {
 			return seg
@@ -199,7 +211,8 @@ func (js *journalState) nextToSeal() Segment {
 func (js *journalState) nextToTrim() Segment {
 	if n := len(js.unsealed); n > 0 {
 		seg := js.unsealed[0]
-		if js.lastSealed.IsNonZero() && seg.segnum <= js.lastSealed.segnum {
+		lastSealed := js.lastSealed()
+		if lastSealed.IsNonZero() && seg.segnum <= lastSealed.segnum {
 			return seg
 		}
 	}
@@ -219,6 +232,12 @@ func (js *journalState) summary() Summary {
 		s.FirstUnsealedSegment = first
 		s.LastUnsealedSegment = js.unsealed[n-1]
 		s.SegmentCount = n
+	}
+	if n := len(js.sealed); n > 0 {
+		first := js.sealed[0]
+		s.FirstSealedSegment = first
+		s.LastSealedSegment = js.sealed[n-1]
+		s.SegmentCount += n
 	}
 	return s
 }
@@ -252,9 +271,6 @@ func (js *journalState) addSegment(j *Journal, seg Segment) {
 		return
 	}
 	if seg.status.IsSealed() {
-		if js.lastSealed.IsZero() || compareSegments(seg, js.lastSealed) > 0 {
-			js.lastSealed = seg
-		}
 		if n := len(js.sealed); n > 0 {
 			prev := js.sealed[n-1]
 			if compareSegments(seg, prev) <= 0 {
@@ -277,12 +293,14 @@ func (js *journalState) removeSegment(seg Segment) {
 	if !js.initialized {
 		return
 	}
-	if js.lastSealed == seg {
-		js.reset()
-		return
-	}
-	if i := slices.Index(js.unsealed, seg); i >= 0 {
-		js.unsealed = slices.Delete(js.unsealed, i, i+1)
+	if seg.status.IsSealed() {
+		if i := slices.Index(js.sealed, seg); i >= 0 {
+			js.sealed = slices.Delete(js.sealed, i, i+1)
+		}
+	} else {
+		if i := slices.Index(js.unsealed, seg); i >= 0 {
+			js.unsealed = slices.Delete(js.unsealed, i, i+1)
+		}
 	}
 }
 
