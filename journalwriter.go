@@ -123,7 +123,7 @@ func (jw *journalWriter) prepareToWrite_locked_once(failed *Segment) error {
 			return err
 		}
 		if jw.j.verbose {
-			jw.j.logger.Debug("journal last segment is finalized", "journal", jw.j.debugName, "seg", last, "h", h)
+			jw.j.logger.Debug("journal last segment is finalized", "journal", jw.j.debugName, "seg", last, "last_ts", h.LastTimestamp, "last_rec", h.LastRecordNumber)
 		}
 
 		jw.nextSegNum = last.segnum + 1

@@ -43,7 +43,13 @@ func compareSegments(a, b Segment) int {
 	if a.segnum != b.segnum {
 		return cmp.Compare(a.segnum, b.segnum)
 	}
-	return cmp.Compare(a.status, b.status)
+	if a.ts != b.ts {
+		return cmp.Compare(a.ts, b.ts)
+	}
+	if a.recnum != b.recnum {
+		return cmp.Compare(a.recnum, b.recnum)
+	}
+	return -cmp.Compare(a.status, b.status)
 }
 
 func (seg Segment) fileName(j *Journal) string {

@@ -2,6 +2,8 @@ package journal_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -146,6 +148,73 @@ func TestJournalSeal_bug_601(t *testing.T) {
 		"jS0000000005-20240101T000020000-000000000021.wal",
 		"jS0000000006-20240101T000025000-000000000026.wal",
 	})
+}
+
+func TestJournalSeal_mix_invalid(t *testing.T) {
+	stash := t.TempDir()
+
+	j := setupWritable(t, newClock(), journal.Options{
+		MaxFileSize: 165,
+	})
+	writeN(j, 5)
+	copy(j.Dir, stash, "jW0000000001-20240101T000000000-000000000001.wal")
+	writeN(j, 5)
+	ensure(j.Journal.FinishWriting())
+	ensure(j.Journal.Rotate())
+	copy(j.Dir, stash, "jF0000000001-20240101T000000000-000000000001.wal")
+	must(j.SealAndTrimAll(context.Background()))
+	deepEq(t, j.FileNames(), []string{
+		"jS0000000001-20240101T000000000-000000000001.wal",
+		"jS0000000002-20240101T000005000-000000000006.wal",
+	})
+
+	j2 := open(t, j.clock, t.TempDir(), journal.Options{MaxFileSize: 165})
+	writeN(j2, 10)
+	ensure(j2.Journal.Rotate())
+	must(j2.SealAndTrimAll(context.Background()))
+	deepEq(t, j2.FileNames(), []string{
+		"jS0000000001-20240101T000010000-000000000001.wal",
+		"jS0000000002-20240101T000015000-000000000006.wal",
+	})
+
+	for _, e := range must(os.ReadDir(j2.Dir)) {
+		move(j2.Dir, j.Dir, e.Name())
+	}
+	move(stash, j.Dir, "jW0000000001-20240101T000000000-000000000001.wal")
+	move(stash, j.Dir, "jF0000000001-20240101T000000000-000000000001.wal")
+	deepEq(t, j.FileNames(), []string{
+		"jF0000000001-20240101T000000000-000000000001.wal",
+		"jS0000000001-20240101T000000000-000000000001.wal",
+		"jW0000000001-20240101T000000000-000000000001.wal",
+		"jS0000000001-20240101T000010000-000000000001.wal",
+		"jS0000000002-20240101T000005000-000000000006.wal",
+		"jS0000000002-20240101T000015000-000000000006.wal",
+	})
+
+	j = open(t, j.clock, j.Dir, journal.Options{MaxFileSize: 165})
+	j.StartWriting()
+	deepEq(t, j.FileNames(), []string{
+		"jS0000000001-20240101T000000000-000000000001.wal",
+		"jS0000000002-20240101T000005000-000000000006.wal",
+	})
+	deepEq(t, j.Segments(), []string{
+		"S0000000001-20240101T000000000-000000000001",
+		"S0000000002-20240101T000005000-000000000006",
+	})
+}
+
+func copy(srcDir, destDir, fileName string) {
+	srcPath := filepath.Join(srcDir, fileName)
+	destPath := filepath.Join(destDir, fileName)
+
+	raw := must(os.ReadFile(srcPath))
+	ensure(os.WriteFile(destPath, raw, 0666))
+}
+
+func move(srcDir, destDir, fileName string) {
+	srcPath := filepath.Join(srcDir, fileName)
+	destPath := filepath.Join(destDir, fileName)
+	ensure(os.Rename(srcPath, destPath))
 }
 
 func BenchmarkJournalSeal(b *testing.B) {

@@ -286,6 +286,14 @@ func (j *Journal) filePath(name string) string {
 	return filepath.Join(j.dir, name)
 }
 
+func (j *Journal) removeFile(seg Segment) error {
+	if j.verbose {
+		j.logger.Debug("journal deleting segment", "journal", j.debugName, "seg", seg)
+	}
+	name := seg.fileName(j)
+	return os.Remove(j.filePath(name))
+}
+
 func (j *Journal) openFile(seg Segment, writable bool) (*os.File, error) {
 	name := seg.fileName(j)
 	if writable {

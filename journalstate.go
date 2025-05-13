@@ -145,30 +145,47 @@ func (js *journalState) ensureInitialized(j *Journal) error {
 }
 
 func (js *journalState) initialize(j *Journal) error {
-	var sealed []Segment
-	var unsealed []Segment
+	var undesirables []Segment
+	var all []Segment
 	err := j.enumSegments(func(seg Segment) error {
 		switch seg.status {
 		case sealingTemp:
-			err := os.Remove(j.filePath(seg.fileName(j)))
-			if err != nil {
-				return err
-			}
-		case Sealed:
-			sealed = append(sealed, seg)
+			undesirables = append(undesirables, seg)
 		default:
-			unsealed = append(unsealed, seg)
+			all = append(all, seg)
 		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
+	slices.SortFunc(all, compareSegments)
 
-	slices.SortFunc(sealed, compareSegments)
-	slices.SortFunc(unsealed, compareSegments)
+	var sealed []Segment
+	var unsealed []Segment
+	var maxSeg uint64
+	for _, seg := range all {
+		if seg.segnum > maxSeg {
+			if seg.status.IsSealed() {
+				sealed = append(sealed, seg)
+			} else {
+				unsealed = append(unsealed, seg)
+			}
+			maxSeg = seg.segnum
+		} else {
+			undesirables = append(undesirables, seg)
+		}
+	}
 	js.sealed = sealed
 	js.unsealed = unsealed
+
+	for _, seg := range undesirables {
+		err := j.removeFile(seg)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+
 	return nil
 }
 

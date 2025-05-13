@@ -122,3 +122,12 @@ func (j *testJournal) FileNames() []string {
 	})
 	return names
 }
+
+func (j *testJournal) Segments() []string {
+	var names []string
+	for _, seg := range must(j.FindSegments(journal.Filter{})) {
+		names = append(names, seg.String())
+	}
+	slices.Sort(names)
+	return names
+}
