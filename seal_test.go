@@ -157,11 +157,11 @@ func TestJournalSeal_mix_invalid(t *testing.T) {
 		MaxFileSize: 165,
 	})
 	writeN(j, 5)
-	copy(j.Dir, stash, "jW0000000001-20240101T000000000-000000000001.wal")
+	copyFile(j.Dir, stash, "jW0000000001-20240101T000000000-000000000001.wal")
 	writeN(j, 5)
 	ensure(j.Journal.FinishWriting())
 	ensure(j.Journal.Rotate())
-	copy(j.Dir, stash, "jF0000000001-20240101T000000000-000000000001.wal")
+	copyFile(j.Dir, stash, "jF0000000001-20240101T000000000-000000000001.wal")
 	must(j.SealAndTrimAll(context.Background()))
 	deepEq(t, j.FileNames(), []string{
 		"jS0000000001-20240101T000000000-000000000001.wal",
@@ -203,7 +203,7 @@ func TestJournalSeal_mix_invalid(t *testing.T) {
 	})
 }
 
-func copy(srcDir, destDir, fileName string) {
+func copyFile(srcDir, destDir, fileName string) {
 	srcPath := filepath.Join(srcDir, fileName)
 	destPath := filepath.Join(destDir, fileName)
 

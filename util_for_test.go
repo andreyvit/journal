@@ -116,6 +116,15 @@ func bytesEq(t testing.TB, a, e []byte) bool {
 	return true
 }
 
+func success(t testing.TB, a error) bool {
+	if a != nil {
+		t.Helper()
+		t.Errorf("** failed: %v", a)
+		return false
+	}
+	return true
+}
+
 func hexDump(b []byte, highlightOff int) string {
 	var buf strings.Builder
 	var off int
