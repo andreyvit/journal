@@ -120,6 +120,18 @@ func (c *Cursor) next() error {
 			Timestamp: c.reader.ts,
 			Data:      c.reader.data,
 		}
+		if c.filter.MinRecordID != 0 && c.Record.ID < c.filter.MinRecordID {
+			continue
+		}
+		if c.filter.MaxRecordID != 0 && c.Record.ID > c.filter.MaxRecordID {
+			continue
+		}
+		if c.filter.MinTimestamp != 0 && c.Record.Timestamp < c.filter.MinTimestamp {
+			continue
+		}
+		if c.filter.MaxTimestamp != 0 && c.Record.Timestamp > c.filter.MaxTimestamp {
+			continue
+		}
 		return nil
 	}
 }
