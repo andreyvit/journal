@@ -5,6 +5,8 @@ type Filter struct {
 	MinTimestamp uint64
 	MaxRecordID  uint64
 	MaxTimestamp uint64
+	Limit        int
+	Latest       bool
 }
 
 // type collectSegmentsSession struct {

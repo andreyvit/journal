@@ -306,3 +306,23 @@ func TestJournalInternals(t *testing.T) {
 		"db7c368a2184d721",
 	)
 }
+
+func TestJournalFilter_latest(t *testing.T) {
+	clock := newClock()
+	j := setupWritable(t, clock, journal.Options{
+		MaxFileSize: 165,
+	})
+	for i := range 100 {
+		ensure(j.WriteRecord(0, fmt.Append(nil, i)))
+		clock.Advance(1 * time.Second)
+	}
+	ensure(j.Commit())
+
+	recs := j.All(journal.Filter{Limit: 5, Latest: true})
+	eq(t, len(recs), 5)
+	eqstr(t, recs[0].Data, []byte("95"))
+	eqstr(t, recs[1].Data, []byte("96"))
+	eqstr(t, recs[2].Data, []byte("97"))
+	eqstr(t, recs[3].Data, []byte("98"))
+	eqstr(t, recs[4].Data, []byte("99"))
+}

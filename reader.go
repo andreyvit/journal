@@ -84,7 +84,28 @@ func (c *Cursor) closeFile() {
 }
 
 func (c *Cursor) next() error {
+	var lim uint64
+	if c.filter.Limit > 0 {
+		lim = uint64(c.filter.Limit)
+	}
+
 	if c.segments == nil {
+		if lim > 0 {
+			sum, err := c.j.Summary()
+			if err != nil {
+				return err
+			}
+			if c.filter.Latest {
+				if sum.LastCommitted.ID >= lim {
+					c.filter.MinRecordID = max(c.filter.MinRecordID, sum.LastCommitted.ID-lim+1)
+				}
+			} else {
+				first := sum.FirstRecord().ID
+				c.filter.MinRecordID = first
+				c.filter.MaxRecordID = first + lim - 1
+			}
+		}
+
 		var err error
 		c.segments, err = c.j.FindSegments(c.filter)
 		if err != nil {

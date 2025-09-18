@@ -11,10 +11,17 @@ type Summary struct {
 }
 
 func (s *Summary) FirstRecord() Meta {
-	if s.FirstUnsealedSegment.IsZero() {
-		return Meta{}
+	unsealed := s.FirstUnsealedSegment.FirstRecord()
+	sealed := s.FirstSealedSegment.FirstRecord()
+	if sealed.IsZero() {
+		return unsealed
+	} else if unsealed.IsZero() {
+		return sealed
+	} else if sealed.ID < unsealed.ID {
+		return sealed
+	} else {
+		return unsealed
 	}
-	return s.FirstUnsealedSegment.FirstRecord()
 }
 
 func (s *Summary) UncommittedCount() int {
