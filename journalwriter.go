@@ -180,7 +180,7 @@ func (jw *journalWriter) WriteRecord(timestamp uint64, data []byte) error {
 
 	err := jw.ensurePreparedToWrite_locked()
 	if err != nil {
-		return nil
+		return err
 	}
 
 	if jw.segWriter != nil && jw.segWriter.shouldRotate(len(data)) {
