@@ -63,7 +63,7 @@ func (jw *journalWriter) fail(err error) error {
 
 	jw.finishWriting_locked(closeWithoutCommitting)
 
-	if jw.writeErr != nil {
+	if jw.writeErr == nil {
 		jw.writeErr = err
 	}
 	return err
