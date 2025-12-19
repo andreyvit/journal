@@ -44,7 +44,7 @@ func (jw *journalWriter) StartWriting() {
 
 	go func() {
 		defer jw.writeLock.Unlock()
-		jw.fail(jw.prepareToWrite_locked())
+		jw.fail_locked(jw.prepareToWrite_locked())
 	}()
 }
 
@@ -54,7 +54,7 @@ func (jw *journalWriter) FinishWriting(mode closeMode) error {
 	return jw.finishWriting_locked(mode)
 }
 
-func (jw *journalWriter) fail(err error) error {
+func (jw *journalWriter) fail_locked(err error) error {
 	if err == nil {
 		return nil
 	}
@@ -69,10 +69,10 @@ func (jw *journalWriter) fail(err error) error {
 	return err
 }
 
-func (jw *journalWriter) fsyncFailed(err error) {
+func (jw *journalWriter) fsyncFailed_locked(err error) {
 	// TODO: enter a TOTALLY FAILED mode that's preserved across restarts
 	// (e.g. by creating a sentinel file)
-	jw.fail(err)
+	jw.fail_locked(err)
 }
 
 func (jw *journalWriter) prepareToWrite_locked() error {
@@ -144,7 +144,7 @@ func (jw *journalWriter) ensurePreparedToWrite_locked() error {
 	}
 	err := jw.prepareToWrite_locked()
 	if err != nil {
-		return jw.fail(err)
+		return jw.fail_locked(err)
 	}
 	jw.writable = true
 	return nil
@@ -201,7 +201,7 @@ func (jw *journalWriter) WriteRecord(timestamp uint64, data []byte) error {
 		}
 		sw, err := startSegment(jw.j, segnum, timestamp, recnum)
 		if err != nil {
-			return jw.fail(err)
+			return jw.fail_locked(err)
 		}
 		jw.segWriter = sw
 	}
@@ -215,7 +215,7 @@ func (jw *journalWriter) WriteRecord(timestamp uint64, data []byte) error {
 
 	jw.j.setLastUncommittedRecord(Meta{ID: jw.segWriter.nextRec, Timestamp: timestamp})
 
-	return jw.fail(jw.segWriter.writeRecord(timestamp, data))
+	return jw.fail_locked(jw.segWriter.writeRecord(timestamp, data))
 }
 
 func (jw *journalWriter) Autocommit(now uint64) (bool, error) {
@@ -242,16 +242,16 @@ func (jw *journalWriter) Commit() error {
 	if jw.segWriter == nil {
 		return nil
 	}
-	err := jw.fail(jw.segWriter.commit())
+	err := jw.fail_locked(jw.segWriter.commit())
 	if err != nil {
 		jw.j.setLastRecordUnknown()
 		return err
 	}
-	jw.handleCommit(jw.segWriter.lastMeta())
+	jw.handleCommit_locked(jw.segWriter.lastMeta())
 	return nil
 }
 
-func (jw *journalWriter) handleCommit(lastRec Meta) {
+func (jw *journalWriter) handleCommit_locked(lastRec Meta) {
 	jw.j.setLastRecord(lastRec, lastRec)
 }
 
@@ -267,7 +267,7 @@ func (jw *journalWriter) close_locked(mode closeMode) error {
 		jw.j.setLastRecordUnknown()
 		var fsf *fsyncFailedError
 		if errors.As(err, &fsf) {
-			jw.fsyncFailed(err)
+			jw.fsyncFailed_locked(err)
 		}
 	}
 	jw.handleCommit(jw.segWriter.lastMeta())
