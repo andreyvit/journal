@@ -277,6 +277,7 @@ func (jw *journalWriter) close_locked(mode closeMode) error {
 		if errors.As(err, &fsf) {
 			jw.fsyncFailed_locked(err)
 		}
+		return err
 	}
 
 	jw.handleCommit_locked(lastMeta)
