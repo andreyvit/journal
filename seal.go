@@ -225,8 +225,7 @@ func (j *Journal) Trim() (Segment, error) {
 		return Segment{}, nil
 	}
 
-	fn := j.filePath(next.fileName(j))
-	err = os.Remove(fn)
+	err = j.deleteSegment(next)
 	if err != nil {
 		return next, err
 	}

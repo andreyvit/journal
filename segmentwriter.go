@@ -80,12 +80,9 @@ func continueSegment(j *Journal, seg Segment) (*segmentWriter, error) {
 	var recoveredModified bool
 	if err == errCorruptedFile {
 		if sr == nil || sr.committedRec == 0 {
-			fileName := seg.fileName(j)
-			j.logger.LogAttrs(j.context, slog.LevelWarn, "journal deleting completely corrupted file", slog.String("journal", j.debugName), slog.String("file", fileName))
-			j.updateStateWithSegmentGone(seg)
-			err := os.Remove(j.filePath(fileName))
+			err := j.quarantineSegment(seg, errCorruptedFile)
 			if err != nil {
-				return nil, fmt.Errorf("journal: failed to delete corrupted file: %w", err)
+				return nil, fmt.Errorf("journal: failed to quarantine corrupted file: %w", err)
 			}
 			return nil, errFileGone
 		} else {

@@ -89,6 +89,7 @@ type Options struct {
 	SegmentInvariant [32]byte
 	Autorotate       AutorotateOptions
 	Autocommit       AutocommitOptions
+	TrashPath        string // optional; defaults to <dir>/trash
 
 	Context     context.Context
 	Logger      *slog.Logger
@@ -118,6 +119,7 @@ type Journal struct {
 	fileNameSuffix   string
 	debugName        string
 	dir              string
+	trashPath        string
 	now              func() time.Time
 	logger           *slog.Logger
 	serialIDs        bool
@@ -157,6 +159,12 @@ func New(dir string, o Options) *Journal {
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
+	trashPath := o.TrashPath
+	if trashPath == "" {
+		trashPath = filepath.Join(dir, "trash")
+	} else if !filepath.IsAbs(trashPath) {
+		trashPath = filepath.Join(dir, trashPath)
+	}
 	j := &Journal{
 		context:          o.Context,
 		maxFileSize:      o.MaxFileSize,
@@ -164,6 +172,7 @@ func New(dir string, o Options) *Journal {
 		fileNameSuffix:   suffix,
 		debugName:        o.DebugName,
 		dir:              dir,
+		trashPath:        trashPath,
 		now:              o.Now,
 		verbose:          o.Verbose,
 		veryVerbose:      o.VeryVerbose,
@@ -289,7 +298,7 @@ func (j *Journal) filePath(name string) string {
 	return filepath.Join(j.dir, name)
 }
 
-func (j *Journal) removeFile(seg Segment) error {
+func (j *Journal) deleteSegment(seg Segment) error {
 	if j.verbose {
 		j.logger.Debug("journal deleting segment", "journal", j.debugName, "seg", seg)
 	}

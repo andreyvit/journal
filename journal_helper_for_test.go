@@ -111,8 +111,11 @@ func (j *testJournal) Data(fileName string) []byte {
 
 func (j *testJournal) FileNames() []string {
 	var names []string
-	for _, env := range must(os.ReadDir(j.Dir)) {
-		names = append(names, env.Name())
+	for _, f := range must(os.ReadDir(j.Dir)) {
+		if f.IsDir() && f.Name() == "trash" {
+			continue
+		}
+		names = append(names, f.Name())
 	}
 	slices.SortFunc(names, func(a, b string) int {
 		return cmp.Or(

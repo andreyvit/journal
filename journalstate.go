@@ -180,7 +180,7 @@ func (js *journalState) initialize(j *Journal) error {
 	js.unsealed = unsealed
 
 	for _, seg := range undesirables {
-		err := j.removeFile(seg)
+		err := j.deleteSegment(seg)
 		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
