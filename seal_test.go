@@ -2,8 +2,10 @@ package journal_test
 
 import (
 	"context"
+	"encoding/binary"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
@@ -203,6 +205,38 @@ func TestJournalSeal_mix_invalid(t *testing.T) {
 	})
 }
 
+func TestJournalSeal_corruptedFinalizedSegmentQuarantined(t *testing.T) {
+	j := setupWritable(t, newClock(), journal.Options{
+		MaxFileSize: 165,
+	}, nonVerbose)
+
+	writeN(j, 3)
+	ensure(j.Journal.Rotate())
+	writeN(j, 3)
+	ensure(j.Journal.Rotate())
+
+	seg1 := "jF0000000001-20240101T000000000-000000000001.wal"
+	seg2 := "jF0000000002-20240101T000003000-000000000004.wal"
+	seg2Sealed := "jS0000000002-20240101T000003000-000000000004.wal"
+
+	deepEq(t, j.FileNames(), []string{seg1, seg2})
+
+	corruptFinalizedCommit(t, filepath.Join(j.Dir, seg1))
+
+	seg := must(j.Seal(context.Background()))
+	ok(t, seg.IsNonZero())
+	deepEq(t, j.FileNames(), []string{seg2})
+	deepEq(t, trashNames(t, j.Dir), []string{seg1})
+
+	seg = must(j.Seal(context.Background()))
+	ok(t, seg.IsNonZero())
+	deepEq(t, j.FileNames(), []string{
+		seg2,
+		seg2Sealed,
+	})
+	deepEq(t, trashNames(t, j.Dir), []string{seg1})
+}
+
 func copyFile(srcDir, destDir, fileName string) {
 	srcPath := filepath.Join(srcDir, fileName)
 	destPath := filepath.Join(destDir, fileName)
@@ -215,6 +249,64 @@ func move(srcDir, destDir, fileName string) {
 	srcPath := filepath.Join(srcDir, fileName)
 	destPath := filepath.Join(destDir, fileName)
 	ensure(os.Rename(srcPath, destPath))
+}
+
+func trashNames(t testing.TB, dir string) []string {
+	t.Helper()
+	trashDir := filepath.Join(dir, "trash")
+	ents, err := os.ReadDir(trashDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatalf("read trash dir %s: %v", trashDir, err)
+	}
+	var names []string
+	for _, ent := range ents {
+		if ent.IsDir() {
+			continue
+		}
+		names = append(names, ent.Name())
+	}
+	sort.Strings(names)
+	return names
+}
+
+func corruptFinalizedCommit(t testing.TB, path string) {
+	t.Helper()
+	const segmentHeaderSize = 128
+	const recordFlagCommit = 1
+	const recordFlagShift = 1
+
+	b := must(os.ReadFile(path))
+	if len(b) < segmentHeaderSize+8 {
+		t.Fatalf("segment too small to corrupt: %s", path)
+	}
+
+	off := segmentHeaderSize
+	for off < len(b) {
+		if b[off]&recordFlagCommit != 0 {
+			if off+8 > len(b) {
+				t.Fatalf("commit extends past end of segment: %s", path)
+			}
+			b[off] ^= 0x02
+			ensure(os.WriteFile(path, b, 0o666))
+			return
+		}
+
+		rawSize, n1 := binary.Uvarint(b[off:])
+		if n1 <= 0 {
+			t.Fatalf("failed to decode record size at off=%d in %s", off, path)
+		}
+		_, n2 := binary.Uvarint(b[off+n1:])
+		if n2 <= 0 {
+			t.Fatalf("failed to decode timestamp at off=%d in %s", off, path)
+		}
+		dataSize := int(rawSize >> recordFlagShift)
+		off += n1 + n2 + dataSize
+	}
+
+	t.Fatalf("no commit record found to corrupt: %s", path)
 }
 
 func BenchmarkJournalSeal(b *testing.B) {

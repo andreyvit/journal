@@ -104,6 +104,12 @@ func (j *Journal) Seal(ctx context.Context) (Segment, error) {
 
 	inf, sr, err := openSegment(j, next)
 	if err != nil {
+		if isSegmentCorruptionError(err) {
+			if qerr := j.quarantineSegment(next, err); qerr != nil {
+				return Segment{}, qerr
+			}
+			return next, nil
+		}
 		return Segment{}, err
 	}
 	defer inf.Close()
@@ -147,6 +153,12 @@ func (j *Journal) Seal(ctx context.Context) (Segment, error) {
 		if err == io.EOF {
 			break
 		} else if err != nil {
+			if isSegmentCorruptionError(err) {
+				if qerr := j.quarantineSegment(next, err); qerr != nil {
+					return tempseg, qerr
+				}
+				return next, nil
+			}
 			return tempseg, err
 		}
 
@@ -258,4 +270,8 @@ func (j *Journal) findKey(keyID [sealer.IDSize]byte) *sealer.Key {
 		}
 	}
 	return nil
+}
+
+func isSegmentCorruptionError(err error) bool {
+	return errors.Is(err, errCorruptedFile) || errors.Is(err, ErrUnsupportedVersion) || errors.Is(err, ErrIncompatible)
 }
