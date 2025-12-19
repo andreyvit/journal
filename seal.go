@@ -146,6 +146,8 @@ func (j *Journal) Seal(ctx context.Context) (Segment, error) {
 		err := sr.next()
 		if err == io.EOF {
 			break
+		} else if err != nil {
+			return tempseg, err
 		}
 
 		var tsDelta uint64
