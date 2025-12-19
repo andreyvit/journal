@@ -94,6 +94,8 @@ func continueSegment(j *Journal, seg Segment) (*segmentWriter, error) {
 			if err != nil {
 				return nil, fmt.Errorf("journal failed to truncate corrupted file: %w", err)
 			}
+			// Defer fsync; we will sync on the next commit/finalize path.
+			recoveredModified = true
 
 			_, err = f.Seek(0, io.SeekStart)
 			if err != nil {
@@ -123,6 +125,7 @@ func continueSegment(j *Journal, seg Segment) (*segmentWriter, error) {
 		nextRec:  sr.rec + 1,
 		size:     sr.committedSize,
 		dataHash: sr.dataHash,
+		modified: recoveredModified,
 	}, nil
 }
 
