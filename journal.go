@@ -90,9 +90,10 @@ type Options struct {
 	Autorotate       AutorotateOptions
 	Autocommit       AutocommitOptions
 
-	Context context.Context
-	Logger  *slog.Logger
-	Verbose bool
+	Context     context.Context
+	Logger      *slog.Logger
+	Verbose     bool
+	VeryVerbose bool
 
 	OnChange func()
 
@@ -121,6 +122,7 @@ type Journal struct {
 	logger           *slog.Logger
 	serialIDs        bool
 	verbose          bool
+	veryVerbose      bool
 	journalInvariant [32]byte
 	segmentInvariant [32]byte
 	onChange         func()
@@ -164,6 +166,7 @@ func New(dir string, o Options) *Journal {
 		dir:              dir,
 		now:              o.Now,
 		verbose:          o.Verbose,
+		veryVerbose:      o.VeryVerbose,
 		journalInvariant: o.JournalInvariant,
 		segmentInvariant: o.SegmentInvariant,
 		logger:           o.Logger,

@@ -192,9 +192,7 @@ func (j *Journal) Seal(ctx context.Context) (Segment, error) {
 	}
 
 	elapsed := time.Since(start)
-	if j.verbose {
-		j.logger.Debug("sealing complete", "dur", elapsed.Milliseconds(), "in_size", inSize, "out_size", outSize, "ns_per_kb", (elapsed / time.Duration((inSize+1023)/1024)).Nanoseconds())
-	}
+	j.logger.Debug("journal sealed", "journal", j.debugName, "dur", elapsed.Milliseconds(), "in_size", inSize, "out_size", outSize, "ns_per_kb", (elapsed / time.Duration((inSize+1023)/1024)).Nanoseconds())
 
 	ok = true
 	j.updateStateWithSegmentAdded(finalseg)

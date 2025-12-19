@@ -77,10 +77,11 @@ func continueSegment(j *Journal, seg Segment) (*segmentWriter, error) {
 	defer closeUnlessOK(f, &ok)
 
 	sr, err := verifySegment(j, f, seg)
+	var recoveredModified bool
 	if err == errCorruptedFile {
 		if sr == nil || sr.committedRec == 0 {
 			fileName := seg.fileName(j)
-			j.logger.LogAttrs(j.context, slog.LevelWarn, "journal: deleting completely corrupted file", slog.String("journal", j.debugName), slog.String("file", fileName))
+			j.logger.LogAttrs(j.context, slog.LevelWarn, "journal deleting completely corrupted file", slog.String("journal", j.debugName), slog.String("file", fileName))
 			j.updateStateWithSegmentGone(seg)
 			err := os.Remove(j.filePath(fileName))
 			if err != nil {
@@ -88,10 +89,10 @@ func continueSegment(j *Journal, seg Segment) (*segmentWriter, error) {
 			}
 			return nil, errFileGone
 		} else {
-			j.logger.LogAttrs(j.context, slog.LevelWarn, "journal: recovered corrupted file", slog.String("journal", j.debugName), slog.String("segment", seg.String()), slog.Int("record", int(sr.committedRec)))
+			j.logger.LogAttrs(j.context, slog.LevelWarn, "journal recovered corrupted file", slog.String("journal", j.debugName), slog.String("segment", seg.String()), slog.Int("record", int(sr.committedRec)))
 			err := f.Truncate(sr.committedSize)
 			if err != nil {
-				return nil, fmt.Errorf("journal: failed to truncate corrupted file: %w", err)
+				return nil, fmt.Errorf("journal failed to truncate corrupted file: %w", err)
 			}
 
 			_, err = f.Seek(0, io.SeekStart)
@@ -99,18 +100,16 @@ func continueSegment(j *Journal, seg Segment) (*segmentWriter, error) {
 				return nil, fmt.Errorf("fseek (before reverify): %w", err)
 			}
 
-			if sr.j.verbose {
-				sr.j.logger.Debug("segment recovered", "journal", sr.j.debugName, "segment", seg.String())
-			}
+			sr.j.logger.Info("journal segment recovered", "journal", sr.j.debugName, "segment", seg.String())
 
 			sr, err = verifySegment(j, f, seg)
 			if err == errCorruptedFile {
-				return nil, fmt.Errorf("journal: failured to recover corrupted file")
+				return nil, fmt.Errorf("journal failured to recover corrupted file")
 			} else if err != nil {
 				return nil, err
 			}
 			if sr.size != sr.committedSize {
-				panic("journal: unreachable")
+				panic("journal unreachable internal error")
 			}
 		}
 	}

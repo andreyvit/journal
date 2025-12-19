@@ -82,16 +82,16 @@ func (set *Set) Autocommit(ctx context.Context) int {
 		}
 		ok, err := j.Autocommit(now)
 		if err != nil {
-			j.logger.Error("commit error", "err", err)
+			j.logger.Error("journal commit error", "journal", j.debugName, "err", err)
 			continue
 		} else if ok {
 			actions++
 		}
 		ok, err = j.Autorotate(now)
 		if err != nil {
-			j.logger.Error("autorotate error", "err", err)
+			j.logger.Error("journal autorotate error", "journal", j.debugName, "err", err)
 		} else if ok {
-			j.logger.Debug("autorotated", "journal", j.String())
+			j.logger.Info("journal autorotated", "journal", j.debugName)
 			actions++
 		}
 	}
@@ -108,7 +108,7 @@ func (set *Set) Autoseal(ctx context.Context) int {
 		n, err := j.SealAndTrimOnce(ctx)
 		actions += n
 		if err != nil {
-			j.logger.Error("seal/trim error", "err", err)
+			j.logger.Error("journal seal/trim error", "journal", j.debugName, "err", err)
 			continue
 		}
 		if n > 0 && set.autosealDelay > 0 {

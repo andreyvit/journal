@@ -59,7 +59,7 @@ func (jw *journalWriter) fail(err error) error {
 		return nil
 	}
 
-	jw.j.logger.LogAttrs(jw.j.context, slog.LevelError, "journal: failed", slog.String("journal", jw.j.debugName), slog.Any("err", err))
+	jw.j.logger.LogAttrs(jw.j.context, slog.LevelError, "journal failed", slog.String("journal", jw.j.debugName), slog.Any("err", err))
 
 	jw.finishWriting_locked(closeWithoutCommitting)
 
@@ -103,7 +103,7 @@ func (jw *journalWriter) prepareToWrite_locked_once(failed *Segment) error {
 		return nil
 	}
 	if last == *failed {
-		return fmt.Errorf("journal: failed twice to continue with segment file %v", last)
+		return fmt.Errorf("journal failed twice to continue with segment file %v", last)
 	}
 
 	if last.status.IsDraft() {
@@ -185,7 +185,7 @@ func (jw *journalWriter) WriteRecord(timestamp uint64, data []byte) error {
 
 	if jw.segWriter != nil && jw.segWriter.shouldRotate(len(data)) {
 		if jw.j.verbose {
-			jw.j.logger.Debug("rotating segment", "journal", jw.j.debugName, "segment", jw.segWriter.seg, "segment_size", jw.segWriter.size, "data_size", len(data))
+			jw.j.logger.Debug("journal rotating segment", "journal", jw.j.debugName, "segment", jw.segWriter.seg, "segment_size", jw.segWriter.size, "data_size", len(data))
 		}
 		err := jw.close_locked(closeAndFinalize)
 		if err != nil {
@@ -197,7 +197,7 @@ func (jw *journalWriter) WriteRecord(timestamp uint64, data []byte) error {
 		segnum := jw.nextSegNum
 		recnum := jw.nextRecNum
 		if jw.j.verbose {
-			jw.j.logger.Debug("starting segment", "journal", jw.j.debugName, "segment", segnum, "record", recnum)
+			jw.j.logger.Debug("journal starting segment", "journal", jw.j.debugName, "segment", segnum, "record", recnum)
 		}
 		sw, err := startSegment(jw.j, segnum, timestamp, recnum)
 		if err != nil {

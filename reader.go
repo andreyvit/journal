@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-var ErrInternal = errors.New("journal: internal error")
+var ErrInternal = errors.New("journal internal error")
 
 type Record struct {
 	ID        uint64
