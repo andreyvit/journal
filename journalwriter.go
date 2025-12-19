@@ -235,10 +235,16 @@ func (jw *journalWriter) Autocommit(now uint64) (bool, error) {
 	if elapsed < dur {
 		return false, nil
 	}
-	return true, jw.Commit()
+	return true, jw.commit_locked()
 }
 
 func (jw *journalWriter) Commit() error {
+	jw.writeLock.Lock()
+	defer jw.writeLock.Unlock()
+	return jw.commit_locked()
+}
+
+func (jw *journalWriter) commit_locked() error {
 	if jw.segWriter == nil {
 		return nil
 	}
@@ -256,6 +262,8 @@ func (jw *journalWriter) handleCommit_locked(lastRec Meta) {
 }
 
 func (jw *journalWriter) close_locked(mode closeMode) error {
+	lastMeta := jw.segWriter.lastMeta()
+
 	if mode.shouldFinalize() {
 		jw.nextSegNum = jw.segWriter.seg.segnum + 1
 		jw.nextRecNum = jw.segWriter.nextRec
@@ -270,7 +278,8 @@ func (jw *journalWriter) close_locked(mode closeMode) error {
 			jw.fsyncFailed_locked(err)
 		}
 	}
-	jw.handleCommit(jw.segWriter.lastMeta())
+
+	jw.handleCommit_locked(lastMeta)
 	jw.segWriter = nil
 	return err
 }
