@@ -103,6 +103,9 @@ func (j *Journal) Seal(ctx context.Context) (Segment, error) {
 	start := time.Now()
 
 	inf, sr, err := openSegment(j, next)
+	if err != nil {
+		return Segment{}, err
+	}
 	defer inf.Close()
 
 	inStat, err := inf.Stat()
