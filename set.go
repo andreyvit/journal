@@ -144,7 +144,7 @@ func runPeriodical(ctx context.Context, wg *sync.WaitGroup, f func(ctx context.C
 		timer := time.NewTimer(interval)
 		select {
 		case <-timer.C:
-			break
+			// nop -- run again
 		case <-ctx.Done():
 			timer.Stop()
 			return
