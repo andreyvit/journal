@@ -55,7 +55,7 @@ func (j *Journal) findKnownSegments(filter Filter) ([]Segment, error) {
 	if len(more) > 0 {
 		segs = append(more, segs...)
 	}
-	return segs, nil
+	return slices.Clone(segs), nil
 }
 
 func (j *Journal) nextToSeal() (Segment, error) {
@@ -90,8 +90,11 @@ func (j *Journal) resetState() {
 
 func (j *Journal) updateStateWithSegmentGone(seg Segment) {
 	j.state.lock.Lock()
-	defer j.state.lock.Unlock()
 	j.state.removeSegment(seg)
+	j.state.lock.Unlock()
+	j.retention.mu.Lock()
+	delete(j.retention.accessed, seg.segnum)
+	j.retention.mu.Unlock()
 }
 
 func (j *Journal) updateStateWithSegmentAdded(seg Segment) {
@@ -109,7 +112,11 @@ func (j *Journal) updateStateWithSegmentFinalized(oldSeg, newSeg Segment) {
 func (j *Journal) setLastRecord(lastCommitted, lastRaw Meta) {
 	j.state.lock.Lock()
 	defer j.state.lock.Unlock()
+	changed := j.state.lastCommitted != lastCommitted
 	j.state.setLastRecord(lastCommitted, lastRaw)
+	if changed {
+		j.notifyReadersLocked()
+	}
 }
 
 func (j *Journal) setLastUncommittedRecord(lastRaw Meta) {
@@ -276,7 +283,7 @@ func (js *journalState) setLastUncommittedRecord(lastRaw Meta) {
 
 func (js *journalState) needsRotation(now uint64, rotopt *AutorotateOptions) bool {
 	last := js.last()
-	if last.IsZero() || !last.status.IsDraft() {
+	if last.IsZero() || !last.status.IsDraft() || now < last.ts {
 		return false
 	}
 	elapsed := time.Duration(now-last.ts) * time.Millisecond

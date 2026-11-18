@@ -12,23 +12,25 @@ import (
 )
 
 type segmentReader struct {
-	j             *Journal
-	f             *os.File
-	r             *bufio.Reader
-	dataHash      xxhash.Digest
-	h             segmentHeader
-	hbuf          [segmentHeaderSize]byte
-	seg           Segment
-	rec           uint64
-	ts            uint64
-	size          int64
-	recordsInSeg  int
-	committedRec  uint64
-	committedTS   uint64
-	committedSize int64
-	lastTS        uint64
-	lastRec       uint64
-	data          []byte
+	j                 *Journal
+	f                 *os.File
+	r                 *bufio.Reader
+	dataHash          xxhash.Digest
+	h                 segmentHeader
+	hbuf              [segmentHeaderSize]byte
+	seg               Segment
+	rec               uint64
+	ts                uint64
+	size              int64
+	recordsInSeg      int
+	committedRec      uint64
+	committedTS       uint64
+	committedSize     int64
+	lastTS            uint64
+	lastRec           uint64
+	data              []byte
+	metadata          SegmentMetadata
+	committedMetadata SegmentMetadata
 }
 
 func verifySegment(j *Journal, f *os.File, seg Segment) (*segmentReader, error) {
@@ -133,6 +135,9 @@ func (sr *segmentReader) next() error {
 			if len(b) == 0 {
 				// end of file; was there a commit?
 				if !isUnsealed || sr.size == sr.committedSize {
+					if err := sr.validateMetadata(); err != nil {
+						return err
+					}
 					return io.EOF
 				} else {
 					if sr.j.verbose {
@@ -168,6 +173,7 @@ func (sr *segmentReader) next() error {
 				sr.committedRec = sr.rec
 				sr.committedTS = sr.ts
 				sr.committedSize = sr.size
+				sr.committedMetadata = sr.metadata
 
 				if sr.j.veryVerbose {
 					sr.j.logger.Debug("journal commit decoded", "journal", sr.j.debugName)
@@ -186,12 +192,17 @@ func (sr *segmentReader) next() error {
 				}
 				return errCorruptedFile
 			}
-			var dataSize int
+			dataSizeRaw := rawSize
 			if isUnsealed {
-				dataSize = int(rawSize / 2)
-			} else {
-				dataSize = int(rawSize)
+				dataSizeRaw /= 2
 			}
+			if dataSizeRaw > uint64(int(^uint(0)>>1)/2) {
+				return errCorruptedFile
+			}
+			if sr.j.maxRecordSize > 0 && dataSizeRaw > uint64(sr.j.maxRecordSize) {
+				return ErrRecordSize
+			}
+			dataSize := int(dataSizeRaw)
 
 			tsdelta, n2 := binary.Uvarint(b[n1:])
 			if n2 <= 0 {
@@ -227,6 +238,10 @@ func (sr *segmentReader) next() error {
 				return err
 			}
 
+			sr.metadata, err = sr.j.foldMetadata(sr.metadata, sr.data)
+			if err != nil {
+				return err
+			}
 			sr.recordsInSeg++
 			sr.rec++
 			sr.ts += tsdelta
@@ -238,6 +253,7 @@ func (sr *segmentReader) next() error {
 				sr.committedRec = sr.rec
 				sr.committedTS = sr.ts
 				sr.committedSize = sr.size
+				sr.committedMetadata = sr.metadata
 			}
 
 			if sr.j.veryVerbose {
@@ -250,6 +266,8 @@ func (sr *segmentReader) next() error {
 }
 
 func readSegmentHeader(j *Journal, r io.Reader, h *segmentHeader, seg Segment, buf *[segmentHeaderSize]byte) error {
+	j.headerLock.RLock()
+	defer j.headerLock.RUnlock()
 	_, err := io.ReadFull(r, buf[:])
 	if err == io.ErrUnexpectedEOF || err == io.EOF {
 		return errCorruptedFile

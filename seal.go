@@ -140,6 +140,9 @@ func (j *Journal) Seal(ctx context.Context) (Segment, error) {
 
 	var hbuf [segmentHeaderSize]byte
 	fillSegmentHeader(hbuf[:], j, magicV1Sealed, tempseg.segnum, tempseg.ts, tempseg.recnum, sr.h.LastTimestamp, sr.h.LastRecordNumber)
+	if j.updateSegmentMetadata != nil {
+		putSegmentMetadata(hbuf[:], sr.h.SegmentInvariant)
+	}
 
 	sealw, err := sealer.Seal(outf, sealKey, hbuf[:], j.sealOpts)
 	if err != nil {

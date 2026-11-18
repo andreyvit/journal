@@ -51,7 +51,10 @@ func (jw *journalWriter) StartWriting() {
 func (jw *journalWriter) FinishWriting(mode closeMode) error {
 	jw.writeLock.Lock()
 	defer jw.writeLock.Unlock()
-	return jw.finishWriting_locked(mode)
+	if err := jw.finishWriting_locked(mode); err != nil {
+		return err
+	}
+	return jw.writeErr
 }
 
 func (jw *journalWriter) fail_locked(err error) error {
@@ -66,6 +69,8 @@ func (jw *journalWriter) fail_locked(err error) error {
 	if jw.writeErr == nil {
 		jw.writeErr = err
 	}
+	jw.j.setLastRecordUnknown()
+	jw.j.notifyReaders()
 	return err
 }
 
@@ -76,6 +81,9 @@ func (jw *journalWriter) fsyncFailed_locked(err error) {
 }
 
 func (jw *journalWriter) prepareToWrite_locked() error {
+	if err := jw.j.validateMetadataOptions(); err != nil {
+		return err
+	}
 	var failed Segment
 	for {
 		err := jw.prepareToWrite_locked_once(&failed)
@@ -136,6 +144,7 @@ func (jw *journalWriter) prepareToWrite_locked_once(failed *Segment) error {
 }
 
 func (jw *journalWriter) ensurePreparedToWrite_locked() error {
+
 	if jw.writeErr != nil {
 		return jw.writeErr
 	}
@@ -166,6 +175,9 @@ func (jw *journalWriter) EnsurePreparedToWrite() error {
 }
 
 func (jw *journalWriter) WriteRecord(timestamp uint64, data []byte) error {
+	if jw.j.maxRecordSize > 0 && int64(len(data)) > jw.j.maxRecordSize {
+		return ErrRecordSize
+	}
 	if len(data) == 0 {
 		return nil
 	}
@@ -183,7 +195,16 @@ func (jw *journalWriter) WriteRecord(timestamp uint64, data []byte) error {
 		return err
 	}
 
-	if jw.segWriter != nil && jw.segWriter.shouldRotate(len(data)) {
+	rotate := jw.segWriter != nil && jw.segWriter.shouldRotate(len(data))
+	var previous SegmentMetadata
+	if jw.segWriter != nil && !rotate {
+		previous = jw.segWriter.metadata
+	}
+	metadata, err := jw.j.foldMetadata(previous, data)
+	if err != nil {
+		return err
+	}
+	if rotate {
 		if jw.j.verbose {
 			jw.j.logger.Debug("journal rotating segment", "journal", jw.j.debugName, "segment", jw.segWriter.seg, "segment_size", jw.segWriter.size, "data_size", len(data))
 		}
@@ -215,7 +236,7 @@ func (jw *journalWriter) WriteRecord(timestamp uint64, data []byte) error {
 
 	jw.j.setLastUncommittedRecord(Meta{ID: jw.segWriter.nextRec, Timestamp: timestamp})
 
-	return jw.fail_locked(jw.segWriter.writeRecord(timestamp, data))
+	return jw.fail_locked(jw.segWriter.writeRecord(timestamp, data, metadata))
 }
 
 func (jw *journalWriter) Autocommit(now uint64) (bool, error) {
@@ -245,10 +266,17 @@ func (jw *journalWriter) Commit() error {
 }
 
 func (jw *journalWriter) commit_locked() error {
+	if jw.writeErr != nil {
+		return jw.writeErr
+	}
 	if jw.segWriter == nil {
 		return nil
 	}
-	err := jw.fail_locked(jw.segWriter.commit())
+	err := jw.segWriter.commit()
+	if err == nil && jw.j.syncOnCommit {
+		err = jw.segWriter.sync()
+	}
+	err = jw.fail_locked(err)
 	if err != nil {
 		jw.j.setLastRecordUnknown()
 		return err
@@ -280,7 +308,11 @@ func (jw *journalWriter) close_locked(mode closeMode) error {
 		return err
 	}
 
-	jw.handleCommit_locked(lastMeta)
+	if mode.shouldCommit() {
+		jw.handleCommit_locked(lastMeta)
+	} else {
+		jw.j.setLastRecordUnknown()
+	}
 	jw.segWriter = nil
 	return err
 }

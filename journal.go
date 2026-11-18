@@ -76,20 +76,25 @@ import (
 var (
 	ErrIncompatible       = fmt.Errorf("incompatible journal")
 	ErrUnsupportedVersion = fmt.Errorf("unsupported journal version")
+	ErrRecordSize         = fmt.Errorf("journal record exceeds size limit")
 	errCorruptedFile      = fmt.Errorf("corrupted journal segment file")
 	errFileGone           = fmt.Errorf("journal segment is gone")
 )
 
 type Options struct {
-	FileName         string // e.g. "mydb-*.bin"
-	MaxFileSize      int64  // new segment after this size
-	DebugName        string
-	Now              func() time.Time
-	JournalInvariant [32]byte
-	SegmentInvariant [32]byte
-	Autorotate       AutorotateOptions
-	Autocommit       AutocommitOptions
-	TrashPath        string // optional; defaults to <dir>/trash
+	FileName              string // e.g. "mydb-*.bin"
+	MaxFileSize           int64  // new segment after this size
+	DebugName             string
+	Now                   func() time.Time
+	JournalInvariant      [32]byte
+	SegmentInvariant      [32]byte
+	Autorotate            AutorotateOptions
+	Autocommit            AutocommitOptions
+	SyncOnCommit          bool
+	MaxRecordSize         int64
+	MaxSegmentRecords     uint64
+	UpdateSegmentMetadata func(SegmentMetadata, []byte) (SegmentMetadata, error)
+	TrashPath             string // optional; defaults to <dir>/trash
 
 	Context     context.Context
 	Logger      *slog.Logger
@@ -113,25 +118,33 @@ type AutocommitOptions struct {
 const DefaultMaxFileSize = 10 * 1024 * 1024
 
 type Journal struct {
-	context          context.Context
-	maxFileSize      int64
-	fileNamePrefix   string
-	fileNameSuffix   string
-	debugName        string
-	dir              string
-	trashPath        string
-	now              func() time.Time
-	logger           *slog.Logger
-	serialIDs        bool
-	verbose          bool
-	veryVerbose      bool
-	journalInvariant [32]byte
-	segmentInvariant [32]byte
-	onChange         func()
-	autorotate       AutorotateOptions
-	autocommit       AutocommitOptions
-	sealKeys         []*sealer.Key
-	sealOpts         sealer.SealOptions
+	context               context.Context
+	maxFileSize           int64
+	fileNamePrefix        string
+	fileNameSuffix        string
+	debugName             string
+	dir                   string
+	trashPath             string
+	now                   func() time.Time
+	logger                *slog.Logger
+	serialIDs             bool
+	verbose               bool
+	veryVerbose           bool
+	journalInvariant      [32]byte
+	segmentInvariant      [32]byte
+	onChange              func()
+	syncOnCommit          bool
+	maxRecordSize         int64
+	maxSegmentRecords     uint64
+	updateSegmentMetadata func(SegmentMetadata, []byte) (SegmentMetadata, error)
+	headerLock            sync.RWMutex
+	retention             retentionState
+	syncFile              func(*os.File) error
+	changed               chan struct{}
+	autorotate            AutorotateOptions
+	autocommit            AutocommitOptions
+	sealKeys              []*sealer.Key
+	sealOpts              sealer.SealOptions
 
 	state    journalState
 	writer   journalWriter
@@ -166,24 +179,30 @@ func New(dir string, o Options) *Journal {
 		trashPath = filepath.Join(dir, trashPath)
 	}
 	j := &Journal{
-		context:          o.Context,
-		maxFileSize:      o.MaxFileSize,
-		fileNamePrefix:   prefix,
-		fileNameSuffix:   suffix,
-		debugName:        o.DebugName,
-		dir:              dir,
-		trashPath:        trashPath,
-		now:              o.Now,
-		verbose:          o.Verbose,
-		veryVerbose:      o.VeryVerbose,
-		journalInvariant: o.JournalInvariant,
-		segmentInvariant: o.SegmentInvariant,
-		logger:           o.Logger,
-		onChange:         o.OnChange,
-		autorotate:       o.Autorotate,
-		autocommit:       o.Autocommit,
-		sealKeys:         o.SealKeys,
-		sealOpts:         o.SealOpts,
+		context:               o.Context,
+		maxFileSize:           o.MaxFileSize,
+		fileNamePrefix:        prefix,
+		fileNameSuffix:        suffix,
+		debugName:             o.DebugName,
+		dir:                   dir,
+		trashPath:             trashPath,
+		now:                   o.Now,
+		verbose:               o.Verbose,
+		veryVerbose:           o.VeryVerbose,
+		journalInvariant:      o.JournalInvariant,
+		segmentInvariant:      o.SegmentInvariant,
+		logger:                o.Logger,
+		onChange:              o.OnChange,
+		syncOnCommit:          o.SyncOnCommit,
+		maxRecordSize:         o.MaxRecordSize,
+		maxSegmentRecords:     o.MaxSegmentRecords,
+		updateSegmentMetadata: o.UpdateSegmentMetadata,
+		syncFile:              (*os.File).Sync,
+		changed:               make(chan struct{}),
+		autorotate:            o.Autorotate,
+		autocommit:            o.Autocommit,
+		sealKeys:              o.SealKeys,
+		sealOpts:              o.SealOpts,
 	}
 	j.writer.j = j
 	return j
@@ -251,6 +270,10 @@ func (j *Journal) StartWriting() {
 
 func (j *Journal) FinishWriting() error {
 	return j.writer.FinishWriting(closeAndContinueLater)
+}
+
+func (j *Journal) AbortWriting() error {
+	return j.writer.FinishWriting(closeWithoutCommitting)
 }
 
 func (j *Journal) Rotate() error {

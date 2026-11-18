@@ -11,15 +11,18 @@ import (
 )
 
 type segmentWriter struct {
-	j           *Journal
-	f           *os.File
-	seg         Segment
-	ts          uint64
-	nextRec     uint64
-	size        int64
-	dataHash    xxhash.Digest
-	uncommitted bool
-	modified    bool
+	j                 *Journal
+	f                 *os.File
+	seg               Segment
+	ts                uint64
+	nextRec           uint64
+	size              int64
+	dataHash          xxhash.Digest
+	uncommitted       bool
+	modified          bool
+	dirSynced         bool
+	metadata          SegmentMetadata
+	committedMetadata SegmentMetadata
 
 	firstUncommittedWriteTS uint64
 }
@@ -87,7 +90,7 @@ func continueSegment(j *Journal, seg Segment) (*segmentWriter, error) {
 			return nil, errFileGone
 		} else {
 			j.logger.LogAttrs(j.context, slog.LevelWarn, "journal recovered corrupted file", slog.String("journal", j.debugName), slog.String("segment", seg.String()), slog.Int("record", int(sr.committedRec)))
-			err := f.Truncate(sr.committedSize)
+			err = f.Truncate(sr.committedSize)
 			if err != nil {
 				return nil, fmt.Errorf("journal failed to truncate corrupted file: %w", err)
 			}
@@ -113,16 +116,22 @@ func continueSegment(j *Journal, seg Segment) (*segmentWriter, error) {
 		}
 	}
 
+	if err != nil {
+		return nil, err
+	}
+
 	ok = true
 	return &segmentWriter{
-		j:        j,
-		f:        f,
-		seg:      sr.seg,
-		ts:       sr.ts,
-		nextRec:  sr.rec + 1,
-		size:     sr.committedSize,
-		dataHash: sr.dataHash,
-		modified: recoveredModified,
+		j:                 j,
+		f:                 f,
+		seg:               sr.seg,
+		ts:                sr.ts,
+		nextRec:           sr.rec + 1,
+		size:              sr.committedSize,
+		dataHash:          sr.dataHash,
+		modified:          recoveredModified,
+		metadata:          sr.committedMetadata,
+		committedMetadata: sr.committedMetadata,
 	}, nil
 }
 
@@ -130,7 +139,7 @@ func (sw *segmentWriter) lastMeta() Meta {
 	return Meta{ID: sw.nextRec - 1, Timestamp: sw.ts}
 }
 
-func (sw *segmentWriter) writeRecord(ts uint64, data []byte) error {
+func (sw *segmentWriter) writeRecord(ts uint64, data []byte, metadata SegmentMetadata) error {
 	var tsDelta uint64
 	if ts > sw.ts {
 		tsDelta = ts - sw.ts
@@ -156,10 +165,12 @@ func (sw *segmentWriter) writeRecord(ts uint64, data []byte) error {
 		return err
 	}
 
+	sw.metadata = metadata
 	sw.uncommitted = true
 	sw.modified = true
 	sw.nextRec++
 	sw.size += int64(len(h) + len(data))
+	sw.j.touchSegment(sw.seg.segnum)
 
 	// if sw.j.verbose {
 	// 	sw.j.logger.Debug("hash after record", "journal", sw.j.debugName, "record", string(data), "hash", fmt.Sprintf("%08x", sw.hash.Sum64()))
@@ -184,7 +195,7 @@ func (sw *segmentWriter) commit() error {
 	if err != nil {
 		return err
 	}
-
+	sw.committedMetadata = sw.metadata
 	return nil
 }
 
@@ -205,25 +216,26 @@ func (sw *segmentWriter) close(mode closeMode) error {
 		if err != nil {
 			return err
 		}
-		if sw.modified {
-			err := sw.f.Sync()
-			if err != nil {
-				return &fsyncFailedError{Cause: err}
-			}
+		if err := sw.sync(); err != nil {
+			return err
 		}
 
 		if mode.shouldFinalize() && sw.seg.status == Draft {
 			var hbuf [segmentHeaderSize]byte
 			fillSegmentHeader(hbuf[:], sw.j, magicV1Finalized, sw.seg.segnum, sw.seg.ts, sw.seg.recnum, sw.ts, sw.nextRec-1)
 
-			_, err = sw.f.Seek(0, io.SeekStart)
+			if sw.j.updateSegmentMetadata != nil {
+				putSegmentMetadata(hbuf[:], sw.committedMetadata)
+			}
+			err = sw.j.writeHeader(sw.f, hbuf[:])
 			if err != nil {
 				return err
 			}
 
-			_, err = sw.f.Write(hbuf[:])
-			if err != nil {
-				return err
+			if sw.j.syncOnCommit || sw.j.updateSegmentMetadata != nil {
+				if err = sw.j.syncFile(sw.f); err != nil {
+					return &fsyncFailedError{Cause: err}
+				}
 			}
 
 			err = sw.f.Close()
@@ -243,6 +255,12 @@ func (sw *segmentWriter) close(mode closeMode) error {
 				return err
 			}
 
+			if sw.j.syncOnCommit || sw.j.updateSegmentMetadata != nil {
+				if err = sw.j.syncDirectory(); err != nil {
+					return err
+				}
+			}
+
 			sw.j.updateStateWithSegmentFinalized(oldSeg, sw.seg)
 		}
 	}
@@ -255,5 +273,6 @@ func (sw *segmentWriter) checksum() uint64 {
 }
 
 func (sw *segmentWriter) shouldRotate(size int) bool {
-	return sw.size+int64(size) > sw.j.maxFileSize
+	return sw.size+int64(size) > sw.j.maxFileSize ||
+		(sw.j.maxSegmentRecords > 0 && sw.nextRec-sw.seg.recnum >= sw.j.maxSegmentRecords)
 }
